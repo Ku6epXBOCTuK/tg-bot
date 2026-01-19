@@ -150,14 +150,46 @@ impl CommandHandler {
         user_id: i64,
         channel: &str,
     ) -> Result<String, CommandError> {
-        // Parse channel ID
+        // Validate channel is not empty
+        if channel.trim().is_empty() {
+            return Err(CommandError::InvalidFormat(
+                "❌ Укажите чат для уведомлений. Формат: /set_channel @username или ID".to_string(),
+            ));
+        }
+
+        // Parse and validate channel ID
         let chat_id = if channel.starts_with('@') {
-            // It's a username, we need to resolve it
-            // For now, just store as string
+            // It's a username - validate format
+            let username = &channel[1..]; // Remove @
+            if username.is_empty() {
+                return Err(CommandError::InvalidFormat(
+                    "❌ Укажите username после @. Формат: /set_channel @username".to_string(),
+                ));
+            }
+            if username.contains(' ') {
+                return Err(CommandError::InvalidFormat(
+                    "❌ Username не должен содержать пробелов".to_string(),
+                ));
+            }
             channel.to_string()
         } else {
-            // It's a numeric ID
-            channel.to_string()
+            // It's a numeric ID - validate
+            match channel.parse::<i64>() {
+                Ok(id) => {
+                    if id == 0 {
+                        return Err(CommandError::InvalidFormat(
+                            "❌ ID чата не может быть 0".to_string(),
+                        ));
+                    }
+                    id.to_string()
+                }
+                Err(_) => {
+                    return Err(CommandError::InvalidFormat(
+                        "❌ Неверный формат ID чата. Укажите числовой ID или username с @"
+                            .to_string(),
+                    ));
+                }
+            }
         };
 
         // Get the last subscription
