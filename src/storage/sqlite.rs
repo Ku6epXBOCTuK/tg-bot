@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Row, Sqlite};
 use std::path::Path;
 use thiserror::Error;
-use tracing::info;
+use tracing::{error, info};
 
 #[derive(Error, Debug)]
 #[allow(dead_code)]
@@ -34,16 +34,56 @@ impl Storage {
         let db_path = Path::new(db_file);
         let is_new = !db_path.exists();
 
+        // Create parent directories if needed
+        if let Some(parent) = db_path.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    StorageError::Migration(format!("Failed to create parent directories: {}", e))
+                })?;
+            }
+        }
+
+        // Create the database file if it doesn't exist
         if is_new {
             info!("Creating new database file: {}", db_file);
+            // Create an empty file first
+            std::fs::File::create(db_file).map_err(|e| {
+                StorageError::Migration(format!("Failed to create database file: {}", e))
+            })?;
         } else {
             info!("Using existing database file: {}", db_file);
         }
 
-        let pool = SqlitePoolOptions::new()
+        let pool = match SqlitePoolOptions::new()
             .max_connections(5)
             .connect(database_url)
-            .await?;
+            .await
+        {
+            Ok(pool) => pool,
+            Err(e) => {
+                // Try to provide more helpful error information
+                let db_file = if database_url.starts_with("sqlite:") {
+                    &database_url[7..]
+                } else {
+                    database_url
+                };
+                let db_path = Path::new(db_file);
+                let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
+
+                error!("Failed to connect to database: {}", e);
+                error!("Database file: {}", db_file);
+                error!("Parent directory: {:?}", parent);
+                error!("Parent exists: {}", parent.exists());
+                error!(
+                    "Parent is writable: {}",
+                    std::fs::metadata(parent)
+                        .map(|m| m.permissions().readonly())
+                        .unwrap_or(true)
+                );
+
+                return Err(StorageError::Sqlx(e));
+            }
+        };
 
         // Run migrations
         sqlx::migrate!("./migrations")
