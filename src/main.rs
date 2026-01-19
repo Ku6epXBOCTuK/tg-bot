@@ -1,21 +1,22 @@
+#![forbid(unsafe_code)]
+
 mod config;
 mod state;
 mod storage;
 mod telegram;
 mod twitch;
-mod web;
 
 use crate::config::Config;
 use crate::state::manager::StateManager;
 use crate::storage::sqlite::Storage;
 use crate::telegram::bot::TelegramBot;
+use crate::telegram::command_handler::CommandHandler;
+use crate::telegram::commands::Command;
 use crate::twitch::api::TwitchApiClient;
-use crate::web::routes::{create_router, AppState};
-use axum::serve;
-use std::net::SocketAddr;
+use crate::twitch::poller::TwitchPoller;
 use std::sync::Arc;
-use tokio::net::TcpListener;
-use tokio::signal;
+use teloxide::prelude::*;
+use teloxide::utils::command::BotCommands;
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -55,10 +56,7 @@ async fn main() {
     info!("Storage initialized successfully");
 
     // Initialize Telegram bot
-    let telegram_bot = TelegramBot::new(
-        config.telegram_bot_token.clone(),
-        config.telegram_channel_id,
-    );
+    let telegram_bot = TelegramBot::new(config.telegram_bot_token.clone());
 
     info!("Telegram bot initialized");
 
@@ -87,66 +85,96 @@ async fn main() {
         );
     }
 
-    // Initialize Twitch API client (not used in current version but available for future features)
-    let _twitch_client = TwitchApiClient::new(config.clone());
+    // Initialize Twitch poller
+    let mut poller = TwitchPoller::new(config.clone(), state_manager.clone(), storage.clone());
 
-    info!("Twitch API client initialized");
+    info!("Twitch poller initialized");
 
-    // Create app state
-    let app_state = AppState {
-        config: config.clone(),
-        state_manager: state_manager.clone(),
-    };
+    // Start polling
+    tokio::spawn(async move {
+        poller.start_polling().await;
+    });
 
-    // Create and start web server
-    let router = create_router(app_state);
-    let addr = SocketAddr::from(([0, 0, 0, 0], config.server_port));
+    // Initialize Twitch API client for command handler
+    let twitch_client = TwitchApiClient::new(config.clone());
 
-    info!("Starting web server on http://{}", addr);
+    // Initialize command handler
+    let command_handler = Arc::new(CommandHandler::new(
+        storage.clone(),
+        telegram_bot.clone(),
+        twitch_client,
+    ));
 
-    let listener = match TcpListener::bind(addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            error!("Failed to bind to address: {}", e);
-            return;
+    info!("Command handler initialized");
+
+    // Start Telegram bot with command handling
+    let bot = Bot::new(config.telegram_bot_token.clone());
+    let handler = command_handler.clone();
+
+    teloxide::repl(bot, move |bot: Bot, msg: Message| {
+        let handler = handler.clone();
+        async move {
+            // Only handle private messages
+            if msg.chat.is_private() {
+                if let Some(text) = msg.text() {
+                    // Log essential info: user ID, username, and command
+                    let user_id = msg.from.as_ref().map(|u| u.id.0).unwrap_or(0);
+                    let username = msg
+                        .from
+                        .as_ref()
+                        .and_then(|u| u.username.clone())
+                        .unwrap_or_else(|| user_id.to_string());
+
+                    info!("User {} (ID: {}) sent: {}", username, user_id, text);
+
+                    // Try to parse command using teloxide's built-in parser
+                    info!("Attempting to parse command: {}", text);
+                    match Command::parse(text, "") {
+                        Ok(command) => {
+                            info!("Parsed command: {:?}", command);
+                            match handler.handle_command(command, user_id as i64).await {
+                                Ok(response) => {
+                                    let result = bot
+                                        .send_message(msg.chat.id, response)
+                                        .parse_mode(teloxide::types::ParseMode::Html)
+                                        .await;
+
+                                    if let Err(e) = result {
+                                        error!("Failed to send response: {}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Error handling command: {}", e);
+                                    let error_msg = format!("❌ Ошибка: {}", e);
+                                    if let Err(send_err) =
+                                        bot.send_message(msg.chat.id, error_msg).await
+                                    {
+                                        error!("Failed to send error message: {}", send_err);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            info!("Failed to parse command: {}", e);
+                            // Show help if command is not recognized
+                            if text.starts_with('/') {
+                                let help_response = handler.handle_help();
+                                if let Err(send_err) = bot
+                                    .send_message(msg.chat.id, help_response)
+                                    .parse_mode(teloxide::types::ParseMode::Html)
+                                    .await
+                                {
+                                    error!("Failed to send help: {}", send_err);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(())
         }
-    };
-
-    let server =
-        serve(listener, router.into_make_service()).with_graceful_shutdown(shutdown_signal());
-
-    // Run the server
-    if let Err(e) = server.await {
-        error!("Server error: {}", e);
-    }
+    })
+    .await;
 
     info!("Bot stopped");
-}
-
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("Failed to install Ctrl+C handler");
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Failed to install SIGTERM handler")
-            .recv()
-            .await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {
-            info!("Ctrl+C received, shutting down...");
-        },
-        _ = terminate => {
-            info!("SIGTERM received, shutting down...");
-        },
-    }
 }

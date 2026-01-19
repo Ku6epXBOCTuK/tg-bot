@@ -42,12 +42,24 @@ INSERT INTO streamers (streamer_id, streamer_login, streamer_name)
 VALUES ('123456789', 'streamer_login', 'Streamer Name');
 ```
 
+### 5. Configure notifications
+
+Each user can configure their own notification settings using Telegram commands:
+
+- `/add <twitch_login>` - Add a streamer to track
+- `/set_channel <@username or ID>` - Set the chat/channel for notifications
+- `/set_text <text>` - Set custom notification message
+- `/add_button <text> | <url>` - Add inline button
+- `/test` - Send test notification
+- `/mysettings` - View your subscriptions and settings
+
+**Note:** Each user can have different notification settings for each streamer. The bot will send notifications to the chat specified by each user.
+
 ## Environment Variables
 
 | Variable               | Required | Description                                            |
 | ---------------------- | -------- | ------------------------------------------------------ |
 | `TELEGRAM_BOT_TOKEN`   | Yes      | Telegram bot token                                     |
-| `TELEGRAM_CHANNEL_ID`  | Yes      | Telegram channel ID (negative)                         |
 | `TWITCH_CLIENT_ID`     | Yes      | Twitch application client ID                           |
 | `TWITCH_CLIENT_SECRET` | Yes      | Twitch application client secret                       |
 | `WEBHOOK_BASE_URL`     | Yes      | Public HTTPS URL of your bot                           |
@@ -105,8 +117,8 @@ WantedBy=multi-user.target
 ### Telegram messages not sending
 
 - Verify `TELEGRAM_BOT_TOKEN` is correct
-- Verify `TELEGRAM_CHANNEL_ID` is correct (must be negative)
-- Ensure bot has permission to post in channel
+- Ensure bot has permission to post in the target chat/channel
+- Use `/set_channel` command to configure notification destination
 
 ### Webhooks not received
 

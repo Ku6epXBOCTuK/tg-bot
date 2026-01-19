@@ -7,9 +7,6 @@ edition = "2021"
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
 
-# Web server
-axum = "0.7"
-
 # Telegram bot
 teloxide = { version = "0.17", features = ["macros"] }
 
@@ -34,23 +31,8 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Cryptography for webhook signature verification
-hmac = "0.12"
-sha2 = "0.10"
-hex = "0.4"
-
 # Date/time handling
 chrono = { version = "0.4", features = ["serde"] }
 
-# UUID for event tracking
-uuid = { version = "1.6", features = ["v4", "serde"] }
-
 # Environment variables
 dotenvy = "0.15"
-
-# URL encoding
-urlencoding = "2.1"
-
-# Tower middleware
-tower = "0.4"
-tower-http = { version = "0.5", features = ["trace", "cors"] }

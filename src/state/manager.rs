@@ -113,12 +113,13 @@ impl StateManager {
 
                             // Send notification
                             let telegram_bot = state_manager.telegram_bot.lock().await;
-                            if let Some(started_at) = state.pending_started_at {
+                            if let Some(_started_at) = state.pending_started_at {
                                 if let Some(message_id) = telegram_bot
                                     .send_stream_notification(
+                                        0, // chat_id will be determined by user settings
                                         &state.streamer_login,
-                                        &state.streamer_name,
-                                        started_at,
+                                        "🔴 <b>Стрим начался!</b>",
+                                        None,
                                     )
                                     .await
                                 {
@@ -238,19 +239,14 @@ impl StateManager {
                             );
 
                             // Delete notification
-                            if let Some(message_id) = state.telegram_message_id {
-                                let telegram_bot = state_manager.telegram_bot.lock().await;
-                                if telegram_bot.delete_message(message_id).await {
-                                    info!(
-                                        "Deleted Telegram message {} for {}",
-                                        message_id, streamer_login_clone
-                                    );
-                                } else {
-                                    info!(
-                                        "Failed to delete Telegram message {} for {}",
-                                        message_id, streamer_login_clone
-                                    );
-                                }
+                            // Note: Message deletion is not currently supported in the per-user/channel architecture
+                            // Each user has their own notification settings, so we can't determine which chat to delete from
+                            // This is a known limitation of the current design
+                            if let Some(_message_id) = state.telegram_message_id {
+                                info!(
+                                    "Stream {} offline, but message deletion is not supported in per-user/channel mode",
+                                    streamer_login_clone
+                                );
                             }
 
                             // Reset state

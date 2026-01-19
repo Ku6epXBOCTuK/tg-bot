@@ -86,10 +86,74 @@ impl Storage {
         };
 
         // Run migrations
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .map_err(|e| StorageError::Migration(e.to_string()))?;
+        match sqlx::migrate!("./migrations").run(&pool).await {
+            Ok(_) => {
+                if is_new {
+                    info!("Database created and migrations applied successfully");
+                } else {
+                    info!("Database initialized and migrations verified");
+                }
+            }
+            Err(e) => {
+                // Check if it's a migration conflict
+                let error_str = e.to_string();
+                if error_str.contains("migration") && error_str.contains("previously applied") {
+                    // Migration conflict detected - backup and recreate
+                    info!("Migration conflict detected, backing up existing database...");
+
+                    // Backup the existing database file
+                    let backup_path = format!(
+                        "{}.backup.{}",
+                        db_file,
+                        chrono::Utc::now().format("%Y%m%d_%H%M%S")
+                    );
+                    std::fs::copy(db_file, &backup_path).map_err(|e| {
+                        StorageError::Migration(format!("Failed to backup database: {}", e))
+                    })?;
+
+                    info!("Database backed up to: {}", backup_path);
+
+                    // Remove the old database file
+                    std::fs::remove_file(db_file).map_err(|e| {
+                        StorageError::Migration(format!("Failed to remove old database: {}", e))
+                    })?;
+
+                    // Create new database file
+                    std::fs::File::create(db_file).map_err(|e| {
+                        StorageError::Migration(format!(
+                            "Failed to create new database file: {}",
+                            e
+                        ))
+                    })?;
+
+                    // Reconnect to the new database
+                    let pool = match SqlitePoolOptions::new()
+                        .max_connections(5)
+                        .connect(database_url)
+                        .await
+                    {
+                        Ok(pool) => pool,
+                        Err(e) => {
+                            error!(
+                                "Failed to reconnect to database after migration conflict: {}",
+                                e
+                            );
+                            return Err(StorageError::Sqlx(e));
+                        }
+                    };
+
+                    // Run migrations again on the new database
+                    sqlx::migrate!("./migrations")
+                        .run(&pool)
+                        .await
+                        .map_err(|e| StorageError::Migration(e.to_string()))?;
+
+                    info!("Database recreated and migrations applied successfully");
+                } else {
+                    return Err(StorageError::Migration(e.to_string()));
+                }
+            }
+        }
 
         if is_new {
             info!("Database created and migrations applied successfully");
@@ -372,5 +436,154 @@ impl Storage {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+}
+
+// User subscription model
+#[derive(Clone, Debug)]
+pub struct UserSubscription {
+    pub id: i64,
+    pub twitch_user_id: String,
+}
+
+// Notification settings model
+#[derive(Clone, Debug)]
+pub struct NotificationSettings {
+    pub target_chat_id: String,
+    pub custom_message: String,
+    pub inline_buttons_json: Option<String>,
+}
+
+impl Storage {
+    // User subscription methods
+    pub async fn add_user_subscription(
+        &self,
+        user_telegram_id: i64,
+        twitch_user_id: &str,
+    ) -> Result<i64, StorageError> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO user_subscriptions (user_telegram_id, twitch_user_id)
+            VALUES (?, ?)
+            ON CONFLICT(user_telegram_id, twitch_user_id) DO UPDATE SET
+                twitch_user_id = excluded.twitch_user_id
+            RETURNING id
+            "#,
+        )
+        .bind(user_telegram_id)
+        .bind(twitch_user_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(result.get("id"))
+    }
+
+    pub async fn get_user_subscriptions(
+        &self,
+        user_telegram_id: i64,
+    ) -> Result<Vec<UserSubscription>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, twitch_user_id
+            FROM user_subscriptions
+            WHERE user_telegram_id = ?
+            "#,
+        )
+        .bind(user_telegram_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| UserSubscription {
+                id: row.get("id"),
+                twitch_user_id: row.get("twitch_user_id"),
+            })
+            .collect())
+    }
+
+    pub async fn get_all_twitch_user_ids(&self) -> Result<Vec<String>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT twitch_user_id
+            FROM user_subscriptions
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| row.get("twitch_user_id"))
+            .collect())
+    }
+
+    pub async fn delete_user_subscription(
+        &self,
+        user_telegram_id: i64,
+        twitch_user_id: &str,
+    ) -> Result<(), StorageError> {
+        sqlx::query(
+            r#"
+            DELETE FROM user_subscriptions
+            WHERE user_telegram_id = ? AND twitch_user_id = ?
+            "#,
+        )
+        .bind(user_telegram_id)
+        .bind(twitch_user_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    // Notification settings methods
+    pub async fn save_notification_settings(
+        &self,
+        subscription_id: i64,
+        target_chat_id: &str,
+        custom_message: &str,
+        inline_buttons_json: Option<&str>,
+    ) -> Result<(), StorageError> {
+        sqlx::query(
+            r#"
+            INSERT INTO notification_settings (subscription_id, target_chat_id, custom_message, inline_buttons_json)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(subscription_id) DO UPDATE SET
+                target_chat_id = excluded.target_chat_id,
+                custom_message = excluded.custom_message,
+                inline_buttons_json = excluded.inline_buttons_json
+            "#,
+        )
+        .bind(subscription_id)
+        .bind(target_chat_id)
+        .bind(custom_message)
+        .bind(inline_buttons_json)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_notification_settings(
+        &self,
+        subscription_id: i64,
+    ) -> Result<Option<NotificationSettings>, StorageError> {
+        let row = sqlx::query(
+            r#"
+            SELECT target_chat_id, custom_message, inline_buttons_json
+            FROM notification_settings
+            WHERE subscription_id = ?
+            "#,
+        )
+        .bind(subscription_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|row| NotificationSettings {
+            target_chat_id: row.get("target_chat_id"),
+            custom_message: row.get("custom_message"),
+            inline_buttons_json: row.get("inline_buttons_json"),
+        }))
     }
 }

@@ -1,11 +1,16 @@
 use crate::config::Config;
-use crate::twitch::eventsub::{
-    EventSubSubscriptionRequest, EventSubSubscriptionResponse, TwitchStreamResponse,
-    TwitchUserResponse,
-};
 use reqwest::{Client, Error as ReqwestError};
+use serde::Deserialize;
 use thiserror::Error;
-use tracing::{info, warn};
+use tracing::info;
+
+#[derive(Deserialize, Debug)]
+pub struct TwitchStreamData {
+    pub user_id: String,
+    pub user_login: String,
+    pub user_name: String,
+    pub started_at: String,
+}
 
 #[derive(Error, Debug)]
 #[allow(dead_code)]
@@ -107,6 +112,25 @@ impl TwitchApiClient {
             )));
         }
 
+        #[derive(Deserialize)]
+        struct TwitchUserResponse {
+            data: Vec<TwitchUserData>,
+        }
+
+        #[derive(Deserialize)]
+        struct TwitchUserData {
+            id: String,
+            login: String,
+            display_name: String,
+            r#type: String,
+            broadcaster_type: String,
+            description: String,
+            profile_image_url: String,
+            offline_image_url: String,
+            view_count: i64,
+            created_at: String,
+        }
+
         let user_response: TwitchUserResponse = response.json().await?;
 
         if user_response.data.is_empty() {
@@ -142,6 +166,11 @@ impl TwitchApiClient {
             )));
         }
 
+        #[derive(Deserialize)]
+        struct TwitchStreamResponse {
+            data: Vec<TwitchStreamData>,
+        }
+
         let stream_response: TwitchStreamResponse = response.json().await?;
 
         if stream_response.data.is_empty() {
@@ -152,125 +181,42 @@ impl TwitchApiClient {
     }
 
     #[allow(dead_code)]
-    pub async fn create_eventsub_subscription(
+    pub async fn get_streams(
         &mut self,
-        user_id: &str,
-        subscription_type: &str,
-    ) -> Result<String, TwitchApiError> {
+        user_ids: &[String],
+    ) -> Result<Vec<TwitchStreamData>, TwitchApiError> {
         self.ensure_access_token().await?;
 
-        let request = EventSubSubscriptionRequest {
-            r#type: subscription_type.to_string(),
-            version: "1".to_string(),
-            condition: {
-                let mut map = std::collections::HashMap::new();
-                map.insert("broadcaster_user_id".to_string(), user_id.to_string());
-                map
-            },
-            transport: crate::twitch::eventsub::EventSubTransport {
-                method: "webhook".to_string(),
-                callback: self.config.twitch_webhook_url(),
-            },
-        };
+        let mut query = Vec::new();
+        for user_id in user_ids {
+            query.push(("user_id", user_id.as_str()));
+        }
 
         let response = self
             .client
-            .post("https://api.twitch.tv/helix/eventsub/subscriptions")
+            .get("https://api.twitch.tv/helix/streams")
             .header("Client-ID", &self.config.twitch_client_id)
             .header(
                 "Authorization",
                 format!("Bearer {}", self.access_token.as_ref().unwrap()),
             )
-            .json(&request)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(TwitchApiError::Api(format!(
-                "Failed to create subscription: {} - {}",
-                status, error_text
-            )));
-        }
-
-        let response_data: EventSubSubscriptionResponse = response.json().await?;
-
-        if response_data.data.is_empty() {
-            return Err(TwitchApiError::Api(
-                "No subscription data returned".to_string(),
-            ));
-        }
-
-        let subscription_id = response_data.data[0].id.clone();
-        info!(
-            "Created {} subscription for user_id {}: {}",
-            subscription_type, user_id, subscription_id
-        );
-
-        Ok(subscription_id)
-    }
-
-    #[allow(dead_code)]
-    pub async fn get_eventsub_subscriptions(
-        &mut self,
-    ) -> Result<Vec<crate::twitch::eventsub::EventSubSubscriptionData>, TwitchApiError> {
-        self.ensure_access_token().await?;
-
-        let response = self
-            .client
-            .get("https://api.twitch.tv/helix/eventsub/subscriptions")
-            .header("Client-ID", &self.config.twitch_client_id)
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.access_token.as_ref().unwrap()),
-            )
+            .query(&query)
             .send()
             .await?;
 
         if !response.status().is_success() {
             return Err(TwitchApiError::Api(format!(
-                "Failed to get subscriptions: {}",
+                "Failed to get streams: {}",
                 response.status()
             )));
         }
 
-        let response_data: EventSubSubscriptionResponse = response.json().await?;
-        Ok(response_data.data)
-    }
-
-    #[allow(dead_code)]
-    pub async fn delete_eventsub_subscription(
-        &mut self,
-        subscription_id: &str,
-    ) -> Result<(), TwitchApiError> {
-        self.ensure_access_token().await?;
-
-        let response = self
-            .client
-            .delete("https://api.twitch.tv/helix/eventsub/subscriptions")
-            .header("Client-ID", &self.config.twitch_client_id)
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.access_token.as_ref().unwrap()),
-            )
-            .query(&[("id", subscription_id)])
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            warn!(
-                "Failed to delete subscription {}: {}",
-                subscription_id,
-                response.status()
-            );
-            return Err(TwitchApiError::Api(format!(
-                "Failed to delete subscription: {}",
-                response.status()
-            )));
+        #[derive(Deserialize)]
+        struct TwitchStreamResponse {
+            data: Vec<TwitchStreamData>,
         }
 
-        info!("Deleted EventSub subscription: {}", subscription_id);
-        Ok(())
+        let stream_response: TwitchStreamResponse = response.json().await?;
+        Ok(stream_response.data)
     }
 }
