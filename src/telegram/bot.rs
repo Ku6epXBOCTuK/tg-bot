@@ -1,8 +1,11 @@
 use reqwest::Url;
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId};
+use teloxide::utils::command::BotCommands;
 use thiserror::Error;
 use tracing::{error, info};
+
+use crate::telegram::commands::Command;
 
 #[derive(Error, Debug)]
 #[allow(dead_code)]
@@ -27,6 +30,22 @@ impl TelegramBot {
         Self {
             bot,
             max_retries: 3,
+        }
+    }
+
+    pub async fn set_my_commands(&self) -> Result<(), TelegramError> {
+        // Get commands and descriptions from the Command enum
+        let commands = Command::bot_commands();
+
+        match self.bot.set_my_commands(commands).await {
+            Ok(_) => {
+                info!("Telegram bot commands set successfully");
+                Ok(())
+            }
+            Err(e) => {
+                error!("Failed to set bot commands: {}", e);
+                Err(TelegramError::Teloxide(e))
+            }
         }
     }
 

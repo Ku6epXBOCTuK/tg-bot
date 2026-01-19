@@ -58,6 +58,12 @@ async fn main() {
     // Initialize Telegram bot
     let telegram_bot = TelegramBot::new(config.telegram_bot_token.clone());
 
+    // Set bot commands for autocomplete
+    match telegram_bot.set_my_commands().await {
+        Ok(_) => info!("Bot commands set successfully"),
+        Err(e) => error!("Failed to set bot commands: {}", e),
+    }
+
     info!("Telegram bot initialized");
 
     // Initialize state manager
