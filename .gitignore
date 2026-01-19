@@ -1,0 +1,48 @@
+# Build artifacts
+/target
+**/*.rs.bk
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.db-journal
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Cargo
+Cargo.lock
+
+# Temporary files
+tmp/
+temp/
+
+# Testing
+coverage/
+lcov.info
+
+# Debug
+*.dSYM/
+*.su
+
+# Release
+*.exe
+*.dll
+*.so
+*.dylib
