@@ -67,31 +67,6 @@ impl StreamState {
     }
 }
 
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct PendingTimer {
-    pub streamer_id: String,
-    pub timer_type: TimerType,
-    pub deadline: std::time::Instant,
-    pub abort_handle: tokio::task::JoinHandle<()>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
-pub enum TimerType {
-    OnlineGrace,
-    OfflineGrace,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct StreamNotification {
-    pub streamer_login: String,
-    pub streamer_name: String,
-    pub message_id: i32,
-    pub started_at: DateTime<Utc>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamerConfig {
     pub streamer_id: String,
@@ -101,19 +76,4 @@ pub struct StreamerConfig {
     pub eventsub_subscription_id: Option<String>,
     pub online_subscription_id: Option<String>,
     pub offline_subscription_id: Option<String>,
-}
-
-impl StreamerConfig {
-    #[allow(dead_code)]
-    pub fn new(streamer_id: String, streamer_login: String, streamer_name: String) -> Self {
-        Self {
-            streamer_id,
-            streamer_login,
-            streamer_name,
-            created_at: Utc::now(),
-            eventsub_subscription_id: None,
-            online_subscription_id: None,
-            offline_subscription_id: None,
-        }
-    }
 }

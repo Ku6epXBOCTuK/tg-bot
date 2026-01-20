@@ -12,9 +12,7 @@ pub enum ConfigError {
 #[derive(Clone, Debug)]
 pub struct Config {
     pub telegram_bot_token: String,
-    #[allow(dead_code)]
     pub twitch_client_id: String,
-    #[allow(dead_code)]
     pub twitch_client_secret: String,
     pub database_url: String,
     pub grace_period_online: u64,  // seconds
@@ -23,12 +21,6 @@ pub struct Config {
     // Validation and limits
     pub max_retries: u32,
     pub retry_delay_seconds: u64,
-    #[allow(dead_code)]
-    pub duplicate_event_threshold_seconds: u64,
-    #[allow(dead_code)]
-    pub token_refresh_buffer_seconds: u64,
-    #[allow(dead_code)]
-    pub max_subscriptions_per_user: usize,
     pub max_buttons_per_subscription: usize,
     pub max_message_length: usize,
 }
@@ -82,30 +74,6 @@ impl Config {
                 ConfigError::InvalidValue("RETRY_DELAY_SECONDS".to_string(), e.to_string())
             })?;
 
-        let duplicate_event_threshold_seconds = env::var("DUPLICATE_EVENT_THRESHOLD_SECONDS")
-            .unwrap_or_else(|_| "30".to_string())
-            .parse::<u64>()
-            .map_err(|e| {
-                ConfigError::InvalidValue(
-                    "DUPLICATE_EVENT_THRESHOLD_SECONDS".to_string(),
-                    e.to_string(),
-                )
-            })?;
-
-        let token_refresh_buffer_seconds = env::var("TOKEN_REFRESH_BUFFER_SECONDS")
-            .unwrap_or_else(|_| "60".to_string())
-            .parse::<u64>()
-            .map_err(|e| {
-                ConfigError::InvalidValue("TOKEN_REFRESH_BUFFER_SECONDS".to_string(), e.to_string())
-            })?;
-
-        let max_subscriptions_per_user = env::var("MAX_SUBSCRIPTIONS_PER_USER")
-            .unwrap_or_else(|_| "10".to_string())
-            .parse::<usize>()
-            .map_err(|e| {
-                ConfigError::InvalidValue("MAX_SUBSCRIPTIONS_PER_USER".to_string(), e.to_string())
-            })?;
-
         let max_buttons_per_subscription = env::var("MAX_BUTTONS_PER_SUBSCRIPTION")
             .unwrap_or_else(|_| "10".to_string())
             .parse::<usize>()
@@ -130,9 +98,6 @@ impl Config {
             polling_interval_seconds,
             max_retries,
             retry_delay_seconds,
-            duplicate_event_threshold_seconds,
-            token_refresh_buffer_seconds,
-            max_subscriptions_per_user,
             max_buttons_per_subscription,
             max_message_length,
         })

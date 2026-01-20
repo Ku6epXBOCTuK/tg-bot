@@ -1,5 +1,5 @@
 use crate::config::Config;
-use reqwest::{Client, Error as ReqwestError, StatusCode};
+use reqwest::{Client, Error as ReqwestError, Response, StatusCode};
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::time::{sleep, Duration};
@@ -14,7 +14,6 @@ pub struct TwitchStreamData {
 }
 
 #[derive(Error, Debug)]
-#[allow(dead_code)]
 pub enum TwitchApiError {
     #[error("HTTP request failed: {0}")]
     Http(#[from] ReqwestError),
@@ -22,8 +21,6 @@ pub enum TwitchApiError {
     Api(String),
     #[error("User not found: {0}")]
     UserNotFound(String),
-    #[error("Stream not found: {0}")]
-    StreamNotFound(String),
 }
 
 #[derive(Clone)]
@@ -44,6 +41,51 @@ impl TwitchApiClient {
         }
     }
 
+    fn get_retry_delay(&self, attempt: u32) -> Duration {
+        Duration::from_secs(self.config.retry_delay_seconds) * 2_u32.pow(attempt - 1)
+    }
+
+    async fn handle_rate_limit(
+        &self,
+        resp: &Response,
+        attempt: u32,
+        max_retries: u32,
+    ) -> Result<(), TwitchApiError> {
+        if attempt < max_retries {
+            let retry_after = resp
+                .headers()
+                .get("Retry-After")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(60);
+
+            warn!(
+                "Rate limited by Twitch API (attempt {}/{}), waiting {} seconds",
+                attempt, max_retries, retry_after
+            );
+            sleep(Duration::from_secs(retry_after)).await;
+            Ok(())
+        } else {
+            Err(TwitchApiError::Api(
+                "Rate limited by Twitch API, max retries exceeded".to_string(),
+            ))
+        }
+    }
+
+    fn log_retry_error(
+        &self,
+        operation: &str,
+        attempt: u32,
+        max_retries: u32,
+        delay: Duration,
+        error: impl std::fmt::Display,
+    ) {
+        warn!(
+            "{} (attempt {}/{}), retrying in {:?}: {}",
+            operation, attempt, max_retries, delay, error
+        );
+    }
+
     #[allow(dead_code)]
     async fn ensure_access_token(&mut self) -> Result<(), TwitchApiError> {
         // Check if token is still valid
@@ -56,7 +98,6 @@ impl TwitchApiClient {
 
         // Get new token with retry logic
         let max_retries = self.config.max_retries;
-        let base_delay = Duration::from_secs(self.config.retry_delay_seconds);
 
         for attempt in 1..=max_retries {
             let response = self
@@ -76,33 +117,21 @@ impl TwitchApiClient {
 
                     // Handle rate limiting (HTTP 429)
                     if status == StatusCode::TOO_MANY_REQUESTS {
-                        if attempt < max_retries {
-                            let retry_after = resp
-                                .headers()
-                                .get("Retry-After")
-                                .and_then(|v| v.to_str().ok())
-                                .and_then(|s| s.parse::<u64>().ok())
-                                .unwrap_or(60);
-
-                            warn!(
-                                "Rate limited by Twitch API (attempt {}/{}), waiting {} seconds",
-                                attempt, max_retries, retry_after
-                            );
-                            sleep(Duration::from_secs(retry_after)).await;
-                            continue;
-                        } else {
-                            return Err(TwitchApiError::Api(
-                                "Rate limited by Twitch API, max retries exceeded".to_string(),
-                            ));
+                        if let Err(e) = self.handle_rate_limit(&resp, attempt, max_retries).await {
+                            return Err(e);
                         }
+                        continue;
                     }
 
                     if !status.is_success() {
                         if attempt < max_retries {
-                            let delay = base_delay * 2_u32.pow(attempt - 1);
-                            warn!(
-                                "Failed to get access token (attempt {}/{}), retrying in {:?}",
-                                attempt, max_retries, delay
+                            let delay = self.get_retry_delay(attempt);
+                            self.log_retry_error(
+                                "Failed to get access token",
+                                attempt,
+                                max_retries,
+                                delay,
+                                status,
                             );
                             sleep(delay).await;
                             continue;
@@ -132,10 +161,13 @@ impl TwitchApiClient {
                 }
                 Err(e) => {
                     if attempt < max_retries {
-                        let delay = base_delay * 2_u32.pow(attempt - 1);
-                        warn!(
-                            "Network error getting access token (attempt {}/{}), retrying in {:?}: {}",
-                            attempt, max_retries, delay, e
+                        let delay = self.get_retry_delay(attempt);
+                        self.log_retry_error(
+                            "Network error getting access token",
+                            attempt,
+                            max_retries,
+                            delay,
+                            e,
                         );
                         sleep(delay).await;
                     } else {
@@ -155,7 +187,6 @@ impl TwitchApiClient {
         self.ensure_access_token().await?;
 
         let max_retries = self.config.max_retries;
-        let base_delay = Duration::from_secs(self.config.retry_delay_seconds);
 
         for attempt in 1..=max_retries {
             let response = self
@@ -176,33 +207,21 @@ impl TwitchApiClient {
 
                     // Handle rate limiting (HTTP 429)
                     if status == StatusCode::TOO_MANY_REQUESTS {
-                        if attempt < max_retries {
-                            let retry_after = resp
-                                .headers()
-                                .get("Retry-After")
-                                .and_then(|v| v.to_str().ok())
-                                .and_then(|s| s.parse::<u64>().ok())
-                                .unwrap_or(60);
-
-                            warn!(
-                                "Rate limited by Twitch API (attempt {}/{}), waiting {} seconds",
-                                attempt, max_retries, retry_after
-                            );
-                            sleep(Duration::from_secs(retry_after)).await;
-                            continue;
-                        } else {
-                            return Err(TwitchApiError::Api(
-                                "Rate limited by Twitch API, max retries exceeded".to_string(),
-                            ));
+                        if let Err(e) = self.handle_rate_limit(&resp, attempt, max_retries).await {
+                            return Err(e);
                         }
+                        continue;
                     }
 
                     if !status.is_success() {
                         if attempt < max_retries {
-                            let delay = base_delay * 2_u32.pow(attempt - 1);
-                            warn!(
-                                "Failed to get user (attempt {}/{}), retrying in {:?}",
-                                attempt, max_retries, delay
+                            let delay = self.get_retry_delay(attempt);
+                            self.log_retry_error(
+                                "Failed to get user",
+                                attempt,
+                                max_retries,
+                                delay,
+                                status,
                             );
                             sleep(delay).await;
                             continue;
@@ -243,10 +262,13 @@ impl TwitchApiClient {
                 }
                 Err(e) => {
                     if attempt < max_retries {
-                        let delay = base_delay * 2_u32.pow(attempt - 1);
-                        warn!(
-                            "Network error getting user (attempt {}/{}), retrying in {:?}: {}",
-                            attempt, max_retries, delay, e
+                        let delay = self.get_retry_delay(attempt);
+                        self.log_retry_error(
+                            "Network error getting user",
+                            attempt,
+                            max_retries,
+                            delay,
+                            e,
                         );
                         sleep(delay).await;
                     } else {
@@ -258,106 +280,6 @@ impl TwitchApiClient {
 
         Err(TwitchApiError::Api(
             "Failed to get user after all retries".to_string(),
-        ))
-    }
-
-    #[allow(dead_code)]
-    pub async fn get_stream_info(
-        &mut self,
-        user_id: &str,
-    ) -> Result<Option<String>, TwitchApiError> {
-        self.ensure_access_token().await?;
-
-        let max_retries = self.config.max_retries;
-        let base_delay = Duration::from_secs(self.config.retry_delay_seconds);
-
-        for attempt in 1..=max_retries {
-            let response = self
-                .client
-                .get("https://api.twitch.tv/helix/streams")
-                .header("Client-ID", &self.config.twitch_client_id)
-                .header(
-                    "Authorization",
-                    format!("Bearer {}", self.access_token.as_ref().unwrap()),
-                )
-                .query(&[("user_id", user_id)])
-                .send()
-                .await;
-
-            match response {
-                Ok(resp) => {
-                    let status = resp.status();
-
-                    // Handle rate limiting (HTTP 429)
-                    if status == StatusCode::TOO_MANY_REQUESTS {
-                        if attempt < max_retries {
-                            let retry_after = resp
-                                .headers()
-                                .get("Retry-After")
-                                .and_then(|v| v.to_str().ok())
-                                .and_then(|s| s.parse::<u64>().ok())
-                                .unwrap_or(60);
-
-                            warn!(
-                                "Rate limited by Twitch API (attempt {}/{}), waiting {} seconds",
-                                attempt, max_retries, retry_after
-                            );
-                            sleep(Duration::from_secs(retry_after)).await;
-                            continue;
-                        } else {
-                            return Err(TwitchApiError::Api(
-                                "Rate limited by Twitch API, max retries exceeded".to_string(),
-                            ));
-                        }
-                    }
-
-                    if !status.is_success() {
-                        if attempt < max_retries {
-                            let delay = base_delay * 2_u32.pow(attempt - 1);
-                            warn!(
-                                "Failed to get stream info (attempt {}/{}), retrying in {:?}",
-                                attempt, max_retries, delay
-                            );
-                            sleep(delay).await;
-                            continue;
-                        } else {
-                            return Err(TwitchApiError::Api(format!(
-                                "Failed to get stream info after {} attempts: {}",
-                                max_retries, status
-                            )));
-                        }
-                    }
-
-                    #[derive(Deserialize)]
-                    struct TwitchStreamResponse {
-                        data: Vec<TwitchStreamData>,
-                    }
-
-                    let stream_response: TwitchStreamResponse = resp.json().await?;
-
-                    if stream_response.data.is_empty() {
-                        return Ok(None);
-                    }
-
-                    return Ok(Some(stream_response.data[0].started_at.clone()));
-                }
-                Err(e) => {
-                    if attempt < max_retries {
-                        let delay = base_delay * 2_u32.pow(attempt - 1);
-                        warn!(
-                            "Network error getting stream info (attempt {}/{}), retrying in {:?}: {}",
-                            attempt, max_retries, delay, e
-                        );
-                        sleep(delay).await;
-                    } else {
-                        return Err(TwitchApiError::Http(e));
-                    }
-                }
-            }
-        }
-
-        Err(TwitchApiError::Api(
-            "Failed to get stream info after all retries".to_string(),
         ))
     }
 
@@ -374,7 +296,6 @@ impl TwitchApiClient {
         }
 
         let max_retries = self.config.max_retries;
-        let base_delay = Duration::from_secs(self.config.retry_delay_seconds);
 
         for attempt in 1..=max_retries {
             let response = self
@@ -395,33 +316,21 @@ impl TwitchApiClient {
 
                     // Handle rate limiting (HTTP 429)
                     if status == StatusCode::TOO_MANY_REQUESTS {
-                        if attempt < max_retries {
-                            let retry_after = resp
-                                .headers()
-                                .get("Retry-After")
-                                .and_then(|v| v.to_str().ok())
-                                .and_then(|s| s.parse::<u64>().ok())
-                                .unwrap_or(60);
-
-                            warn!(
-                                "Rate limited by Twitch API (attempt {}/{}), waiting {} seconds",
-                                attempt, max_retries, retry_after
-                            );
-                            sleep(Duration::from_secs(retry_after)).await;
-                            continue;
-                        } else {
-                            return Err(TwitchApiError::Api(
-                                "Rate limited by Twitch API, max retries exceeded".to_string(),
-                            ));
+                        if let Err(e) = self.handle_rate_limit(&resp, attempt, max_retries).await {
+                            return Err(e);
                         }
+                        continue;
                     }
 
                     if !status.is_success() {
                         if attempt < max_retries {
-                            let delay = base_delay * 2_u32.pow(attempt - 1);
-                            warn!(
-                                "Failed to get streams (attempt {}/{}), retrying in {:?}",
-                                attempt, max_retries, delay
+                            let delay = self.get_retry_delay(attempt);
+                            self.log_retry_error(
+                                "Failed to get streams",
+                                attempt,
+                                max_retries,
+                                delay,
+                                status,
                             );
                             sleep(delay).await;
                             continue;
@@ -443,10 +352,13 @@ impl TwitchApiClient {
                 }
                 Err(e) => {
                     if attempt < max_retries {
-                        let delay = base_delay * 2_u32.pow(attempt - 1);
-                        warn!(
-                            "Network error getting streams (attempt {}/{}), retrying in {:?}: {}",
-                            attempt, max_retries, delay, e
+                        let delay = self.get_retry_delay(attempt);
+                        self.log_retry_error(
+                            "Network error getting streams",
+                            attempt,
+                            max_retries,
+                            delay,
+                            e,
                         );
                         sleep(delay).await;
                     } else {

@@ -1,4 +1,4 @@
-use crate::state::models::{StreamState, StreamStatus, StreamerConfig};
+use crate::state::models::StreamerConfig;
 use chrono::{DateTime, Utc};
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Row, Sqlite};
 use std::path::Path;
@@ -23,6 +23,23 @@ pub struct Storage {
 
 impl Storage {
     pub async fn new(database_url: &str) -> Result<Self, StorageError> {
+        let (db_file, is_new) = Self::prepare_database_file(database_url)?;
+        let pool = Self::create_pool(database_url).await?;
+        Self::run_migrations(&pool, &db_file, is_new).await?;
+        Self::log_initialization_status(is_new).await;
+
+        Ok(Self { pool })
+    }
+
+    async fn log_initialization_status(is_new: bool) {
+        if is_new {
+            info!("Database created and migrations applied successfully");
+        } else {
+            info!("Database initialized and migrations verified");
+        }
+    }
+
+    fn prepare_database_file(database_url: &str) -> Result<(String, bool), StorageError> {
         // Extract file path from URL (e.g., "sqlite:twitch_bot.db" -> "twitch_bot.db")
         let db_file = if let Some(stripped) = database_url.strip_prefix("sqlite:") {
             stripped
@@ -54,12 +71,16 @@ impl Storage {
             info!("Using existing database file: {}", db_file);
         }
 
-        let pool = match SqlitePoolOptions::new()
+        Ok((db_file.to_string(), is_new))
+    }
+
+    async fn create_pool(database_url: &str) -> Result<Pool<Sqlite>, StorageError> {
+        match SqlitePoolOptions::new()
             .max_connections(5)
             .connect(database_url)
             .await
         {
-            Ok(pool) => pool,
+            Ok(pool) => Ok(pool),
             Err(e) => {
                 // Try to provide more helpful error information
                 let db_file = if let Some(stripped) = database_url.strip_prefix("sqlite:") {
@@ -81,115 +102,78 @@ impl Storage {
                         .unwrap_or(true)
                 );
 
-                return Err(StorageError::Sqlx(e));
+                Err(StorageError::Sqlx(e))
             }
-        };
+        }
+    }
 
-        // Run migrations
-        match sqlx::migrate!("./migrations").run(&pool).await {
+    async fn run_migrations(
+        pool: &Pool<Sqlite>,
+        db_file: &str,
+        is_new: bool,
+    ) -> Result<(), StorageError> {
+        match sqlx::migrate!("./migrations").run(pool).await {
             Ok(_) => {
                 if is_new {
                     info!("Database created and migrations applied successfully");
                 } else {
                     info!("Database initialized and migrations verified");
                 }
+                Ok(())
             }
             Err(e) => {
                 // Check if it's a migration conflict
                 let error_str = e.to_string();
                 if error_str.contains("migration") && error_str.contains("previously applied") {
-                    // Migration conflict detected - backup and recreate
-                    info!("Migration conflict detected, backing up existing database...");
-
-                    // Backup the existing database file
-                    let backup_path = format!(
-                        "{}.backup.{}",
-                        db_file,
-                        chrono::Utc::now().format("%Y%m%d_%H%M%S")
-                    );
-                    std::fs::copy(db_file, &backup_path).map_err(|e| {
-                        StorageError::Migration(format!("Failed to backup database: {}", e))
-                    })?;
-
-                    info!("Database backed up to: {}", backup_path);
-
-                    // Remove the old database file
-                    std::fs::remove_file(db_file).map_err(|e| {
-                        StorageError::Migration(format!("Failed to remove old database: {}", e))
-                    })?;
-
-                    // Create new database file
-                    std::fs::File::create(db_file).map_err(|e| {
-                        StorageError::Migration(format!(
-                            "Failed to create new database file: {}",
-                            e
-                        ))
-                    })?;
-
-                    // Reconnect to the new database
-                    let pool = match SqlitePoolOptions::new()
-                        .max_connections(5)
-                        .connect(database_url)
-                        .await
-                    {
-                        Ok(pool) => pool,
-                        Err(e) => {
-                            error!(
-                                "Failed to reconnect to database after migration conflict: {}",
-                                e
-                            );
-                            return Err(StorageError::Sqlx(e));
-                        }
-                    };
-
-                    // Run migrations again on the new database
-                    sqlx::migrate!("./migrations")
-                        .run(&pool)
-                        .await
-                        .map_err(|e| StorageError::Migration(e.to_string()))?;
-
-                    info!("Database recreated and migrations applied successfully");
+                    Self::handle_migration_conflict(db_file, pool).await
                 } else {
-                    return Err(StorageError::Migration(e.to_string()));
+                    Err(StorageError::Migration(e.to_string()))
                 }
             }
         }
-
-        if is_new {
-            info!("Database created and migrations applied successfully");
-        } else {
-            info!("Database initialized and migrations verified");
-        }
-
-        Ok(Self { pool })
     }
 
     #[allow(dead_code)]
-    pub async fn save_streamer_config(&self, config: &StreamerConfig) -> Result<(), StorageError> {
-        sqlx::query(
-            r#"
-            INSERT INTO streamers (streamer_id, streamer_login, streamer_name, created_at,
-                                   online_subscription_id, offline_subscription_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(streamer_id) DO UPDATE SET
-                streamer_login = excluded.streamer_login,
-                streamer_name = excluded.streamer_name,
-                online_subscription_id = excluded.online_subscription_id,
-                offline_subscription_id = excluded.offline_subscription_id
-            "#,
-        )
-        .bind(&config.streamer_id)
-        .bind(&config.streamer_login)
-        .bind(&config.streamer_name)
-        .bind(config.created_at.to_rfc3339())
-        .bind(&config.online_subscription_id)
-        .bind(&config.offline_subscription_id)
-        .execute(&self.pool)
-        .await?;
+    async fn handle_migration_conflict(
+        db_file: &str,
+        _pool: &Pool<Sqlite>,
+    ) -> Result<(), StorageError> {
+        // Migration conflict detected - backup and recreate
+        info!("Migration conflict detected, backing up existing database...");
 
+        // Backup the existing database file
+        let backup_path = format!(
+            "{}.backup.{}",
+            db_file,
+            chrono::Utc::now().format("%Y%m%d_%H%M%S")
+        );
+        std::fs::copy(db_file, &backup_path)
+            .map_err(|e| StorageError::Migration(format!("Failed to backup database: {}", e)))?;
+
+        info!("Database backed up to: {}", backup_path);
+
+        // Remove the old database file
+        std::fs::remove_file(db_file).map_err(|e| {
+            StorageError::Migration(format!("Failed to remove old database: {}", e))
+        })?;
+
+        // Create new database file
+        std::fs::File::create(db_file).map_err(|e| {
+            StorageError::Migration(format!("Failed to create new database file: {}", e))
+        })?;
+
+        // Reconnect to the new database
+        let new_pool = Self::create_pool(&format!("sqlite:{}", db_file)).await?;
+
+        // Run migrations again on the new database
+        sqlx::migrate!("./migrations")
+            .run(&new_pool)
+            .await
+            .map_err(|e| StorageError::Migration(e.to_string()))?;
+
+        info!("Database recreated and migrations applied successfully");
         Ok(())
     }
-
     pub async fn get_streamer_configs(&self) -> Result<Vec<StreamerConfig>, StorageError> {
         let rows = sqlx::query(
             r#"
@@ -226,216 +210,6 @@ impl Storage {
         }
 
         Ok(configs)
-    }
-
-    #[allow(dead_code)]
-    pub async fn get_streamer_config_by_id(
-        &self,
-        streamer_id: &str,
-    ) -> Result<Option<StreamerConfig>, StorageError> {
-        let row = sqlx::query(
-            r#"
-            SELECT
-                streamer_id,
-                streamer_login,
-                streamer_name,
-                created_at,
-                eventsub_subscription_id,
-                online_subscription_id,
-                offline_subscription_id
-            FROM streamers
-            WHERE streamer_id = ?
-            "#,
-        )
-        .bind(streamer_id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(row.map(|row| {
-            let created_at_str: String = row.get("created_at");
-            let created_at = DateTime::parse_from_rfc3339(&created_at_str)
-                .map(|d| d.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now());
-
-            StreamerConfig {
-                streamer_id: row.get("streamer_id"),
-                streamer_login: row.get("streamer_login"),
-                streamer_name: row.get("streamer_name"),
-                created_at,
-                eventsub_subscription_id: row.get("eventsub_subscription_id"),
-                online_subscription_id: row.get("online_subscription_id"),
-                offline_subscription_id: row.get("offline_subscription_id"),
-            }
-        }))
-    }
-
-    #[allow(dead_code)]
-    pub async fn get_streamer_config_by_login(
-        &self,
-        streamer_login: &str,
-    ) -> Result<Option<StreamerConfig>, StorageError> {
-        let row = sqlx::query(
-            r#"
-            SELECT
-                streamer_id,
-                streamer_login,
-                streamer_name,
-                created_at,
-                eventsub_subscription_id,
-                online_subscription_id,
-                offline_subscription_id
-            FROM streamers
-            WHERE streamer_login = ?
-            "#,
-        )
-        .bind(streamer_login)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(row.map(|row| {
-            let created_at_str: String = row.get("created_at");
-            let created_at = DateTime::parse_from_rfc3339(&created_at_str)
-                .map(|d| d.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now());
-
-            StreamerConfig {
-                streamer_id: row.get("streamer_id"),
-                streamer_login: row.get("streamer_login"),
-                streamer_name: row.get("streamer_name"),
-                created_at,
-                eventsub_subscription_id: row.get("eventsub_subscription_id"),
-                online_subscription_id: row.get("online_subscription_id"),
-                offline_subscription_id: row.get("offline_subscription_id"),
-            }
-        }))
-    }
-
-    #[allow(dead_code)]
-    pub async fn delete_streamer(&self, streamer_id: &str) -> Result<(), StorageError> {
-        sqlx::query("DELETE FROM streamers WHERE streamer_id = ?")
-            .bind(streamer_id)
-            .execute(&self.pool)
-            .await?;
-
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub async fn save_stream_state(&self, state: &StreamState) -> Result<(), StorageError> {
-        let status_str = match state.status {
-            StreamStatus::Offline => "offline",
-            StreamStatus::OnlinePending => "online_pending",
-            StreamStatus::Online => "online",
-            StreamStatus::OfflinePending => "offline_pending",
-        };
-
-        sqlx::query(
-            r#"
-            INSERT INTO stream_states (streamer_id, streamer_login, streamer_name, status,
-                                       started_at, pending_started_at, telegram_message_id,
-                                       last_event_id, last_event_timestamp, grace_period_start)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(streamer_id) DO UPDATE SET
-                streamer_login = excluded.streamer_login,
-                streamer_name = excluded.streamer_name,
-                status = excluded.status,
-                started_at = excluded.started_at,
-                pending_started_at = excluded.pending_started_at,
-                telegram_message_id = excluded.telegram_message_id,
-                last_event_id = excluded.last_event_id,
-                last_event_timestamp = excluded.last_event_timestamp,
-                grace_period_start = excluded.grace_period_start
-            "#,
-        )
-        .bind(&state.streamer_id)
-        .bind(&state.streamer_login)
-        .bind(&state.streamer_name)
-        .bind(status_str)
-        .bind(state.started_at.map(|d| d.to_rfc3339()))
-        .bind(state.pending_started_at.map(|d| d.to_rfc3339()))
-        .bind(state.telegram_message_id)
-        .bind(&state.last_event_id)
-        .bind(state.last_event_timestamp.map(|d| d.to_rfc3339()))
-        .bind(state.grace_period_start.map(|d| d.to_rfc3339()))
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub async fn get_all_stream_states(&self) -> Result<Vec<StreamState>, StorageError> {
-        let rows = sqlx::query(
-            r#"
-            SELECT
-                streamer_id,
-                streamer_login,
-                streamer_name,
-                status,
-                started_at,
-                pending_started_at,
-                telegram_message_id,
-                last_event_id,
-                last_event_timestamp,
-                grace_period_start
-            FROM stream_states
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            let status = match row.get::<&str, _>("status") {
-                "offline" => StreamStatus::Offline,
-                "online_pending" => StreamStatus::OnlinePending,
-                "online" => StreamStatus::Online,
-                "offline_pending" => StreamStatus::OfflinePending,
-                _ => StreamStatus::Offline,
-            };
-
-            let parse_datetime = |s: Option<String>| -> Option<DateTime<Utc>> {
-                s.and_then(|s| {
-                    DateTime::parse_from_rfc3339(&s)
-                        .ok()
-                        .map(|d| d.with_timezone(&Utc))
-                })
-            };
-
-            result.push(StreamState {
-                streamer_id: row.get("streamer_id"),
-                streamer_login: row.get("streamer_login"),
-                streamer_name: row.get("streamer_name"),
-                status,
-                started_at: parse_datetime(row.get("started_at")),
-                pending_started_at: parse_datetime(row.get("pending_started_at")),
-                telegram_message_id: row.get("telegram_message_id"),
-                last_event_id: row.get("last_event_id"),
-                last_event_timestamp: parse_datetime(row.get("last_event_timestamp")),
-                grace_period_start: parse_datetime(row.get("grace_period_start")),
-            });
-        }
-
-        Ok(result)
-    }
-
-    #[allow(dead_code)]
-    pub async fn delete_stream_state(&self, streamer_id: &str) -> Result<(), StorageError> {
-        sqlx::query("DELETE FROM stream_states WHERE streamer_id = ?")
-            .bind(streamer_id)
-            .execute(&self.pool)
-            .await?;
-
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub async fn cleanup(&self) -> Result<(), StorageError> {
-        info!("Cleaning up database...");
-        sqlx::query("DELETE FROM stream_states")
-            .execute(&self.pool)
-            .await?;
-        Ok(())
     }
 }
 

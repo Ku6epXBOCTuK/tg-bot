@@ -1,6 +1,6 @@
 use reqwest::Url;
 use teloxide::prelude::*;
-use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId};
+use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup};
 use teloxide::utils::command::BotCommands;
 use thiserror::Error;
 use tracing::{error, info};
@@ -124,43 +124,6 @@ impl TelegramBot {
             chat_id, self.max_retries
         );
         None
-    }
-
-    #[allow(dead_code)]
-    pub async fn delete_message(&self, chat_id: i64, message_id: i32) -> bool {
-        for attempt in 1..=self.max_retries {
-            match self
-                .bot
-                .delete_message(ChatId(chat_id), MessageId(message_id))
-                .await
-            {
-                Ok(_) => {
-                    info!(
-                        "Deleted Telegram message {} in chat {}",
-                        message_id, chat_id
-                    );
-                    return true;
-                }
-                Err(e) => {
-                    info!(
-                        "Attempt {} failed to delete Telegram message {}: {}",
-                        attempt, message_id, e
-                    );
-                    if attempt < self.max_retries {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(
-                            self.retry_delay_seconds,
-                        ))
-                        .await;
-                    }
-                }
-            }
-        }
-
-        error!(
-            "Failed to delete Telegram message {} after {} attempts",
-            message_id, self.max_retries
-        );
-        false
     }
 
     #[allow(dead_code)]

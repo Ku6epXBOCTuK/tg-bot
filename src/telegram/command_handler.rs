@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::storage::sqlite::Storage;
+use crate::storage::sqlite::{NotificationSettings, Storage};
 use crate::telegram::bot::TelegramBot;
 use crate::telegram::commands::{Command, CommandError};
 use crate::twitch::api::TwitchApiClient;
@@ -136,21 +136,8 @@ impl CommandHandler {
     }
 
     async fn validate_button_limit(&self, user_id: i64) -> Result<(), CommandError> {
-        let subscriptions = self
-            .storage
-            .get_user_subscriptions(user_id)
-            .await
-            .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
-
-        let last_sub = subscriptions.last().ok_or_else(|| {
-            CommandError::InvalidFormat("❌ Сначала добавьте стримера с помощью /add".to_string())
-        })?;
-
-        let settings = self
-            .storage
-            .get_notification_settings(last_sub.id)
-            .await
-            .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
+        let (_subscription_id, _twitch_user_id, settings) =
+            self.get_last_subscription_with_settings(user_id).await?;
 
         if let Some(settings) = &settings {
             if let Some(json) = &settings.inline_buttons_json {
@@ -243,42 +230,12 @@ impl CommandHandler {
         for (index, (subscription_id, twitch_user_id, settings)) in
             subscriptions_with_settings.iter().enumerate()
         {
-            response.push_str(&format!(
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
-                <b>Подписка #{}:</b> <code>{}</code>\n\n\
-                📺 <b>Стример:</b> @{}\n\
-                💬 <b>Чат для уведомлений:</b> <code>{}</code>\n\
-                📝 <b>Текст уведомления:</b> {}\n",
-                index + 1,
+            response.push_str(&self.format_subscription_info(
+                index,
                 subscription_id,
                 twitch_user_id,
-                settings.target_chat_id,
-                settings.custom_message
+                settings,
             ));
-
-            // Parse and display buttons
-            if let Some(json) = &settings.inline_buttons_json {
-                if let Ok(buttons) = serde_json::from_str::<Vec<(String, String)>>(json) {
-                    if !buttons.is_empty() {
-                        response.push_str("🔘 <b>Кнопки:</b>\n");
-                        for (btn_index, (btn_text, btn_url)) in buttons.iter().enumerate() {
-                            response.push_str(&format!(
-                                "  {}. {} | <code>{}</code>\n",
-                                btn_index + 1,
-                                btn_text,
-                                btn_url
-                            ));
-                        }
-                    } else {
-                        response.push_str("🔘 <b>Кнопки:</b> нет\n");
-                    }
-                } else {
-                    response.push_str("🔘 <b>Кнопки:</b> ❌ ошибка парсинга\n");
-                }
-            } else {
-                response.push_str("🔘 <b>Кнопки:</b> нет\n");
-            }
-
             response.push('\n');
         }
 
@@ -292,11 +249,81 @@ impl CommandHandler {
         Ok(response)
     }
 
+    fn format_subscription_info(
+        &self,
+        index: usize,
+        subscription_id: &i64,
+        twitch_user_id: &str,
+        settings: &NotificationSettings,
+    ) -> String {
+        let mut info = format!(
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
+            <b>Подписка #{}:</b> <code>{}</code>\n\n\
+            📺 <b>Стример:</b> @{}\n\
+            💬 <b>Чат для уведомлений:</b> <code>{}</code>\n\
+            📝 <b>Текст уведомления:</b> {}\n",
+            index + 1,
+            subscription_id,
+            twitch_user_id,
+            settings.target_chat_id,
+            settings.custom_message
+        );
+
+        // Parse and display buttons
+        if let Some(json) = &settings.inline_buttons_json {
+            if let Ok(buttons) = serde_json::from_str::<Vec<(String, String)>>(json) {
+                if !buttons.is_empty() {
+                    info.push_str("🔘 <b>Кнопки:</b>\n");
+                    for (btn_index, (btn_text, btn_url)) in buttons.iter().enumerate() {
+                        info.push_str(&format!(
+                            "  {}. {} | <code>{}</code>\n",
+                            btn_index + 1,
+                            btn_text,
+                            btn_url
+                        ));
+                    }
+                } else {
+                    info.push_str("🔘 <b>Кнопки:</b> нет\n");
+                }
+            } else {
+                info.push_str("🔘 <b>Кнопки:</b> ❌ ошибка парсинга\n");
+            }
+        } else {
+            info.push_str("🔘 <b>Кнопки:</b> нет\n");
+        }
+
+        info
+    }
+
     async fn handle_set_channel(
         &self,
         user_id: i64,
         channel: &str,
     ) -> Result<String, CommandError> {
+        // Validate and parse channel
+        let chat_id = self.parse_and_validate_channel(channel)?;
+
+        // Get the last subscription with settings
+        let (subscription_id, _twitch_user_id, settings) =
+            self.get_last_subscription_with_settings(user_id).await?;
+
+        // Update settings
+        if let Some(settings) = settings {
+            self.storage
+                .save_notification_settings(
+                    subscription_id,
+                    &chat_id,
+                    &settings.custom_message,
+                    settings.inline_buttons_json.as_deref(),
+                )
+                .await
+                .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
+        }
+
+        Ok(format!("✅ Чат для уведомлений установлен: {}", chat_id))
+    }
+
+    fn parse_and_validate_channel(&self, channel: &str) -> Result<String, CommandError> {
         // Validate channel is not empty
         if channel.trim().is_empty() {
             return Err(CommandError::InvalidFormat(
@@ -354,65 +381,22 @@ impl CommandHandler {
             }
         };
 
-        // Get the last subscription
-        let subscriptions = self
-            .storage
-            .get_user_subscriptions(user_id)
-            .await
-            .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
-
-        let last_sub = subscriptions.last().ok_or_else(|| {
-            CommandError::InvalidFormat("❌ Сначала добавьте стримера с помощью /add".to_string())
-        })?;
-
-        // Update settings
-        let settings = self
-            .storage
-            .get_notification_settings(last_sub.id)
-            .await
-            .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
-
-        if let Some(settings) = settings {
-            self.storage
-                .save_notification_settings(
-                    last_sub.id,
-                    &chat_id,
-                    &settings.custom_message,
-                    settings.inline_buttons_json.as_deref(),
-                )
-                .await
-                .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
-        }
-
-        Ok(format!("✅ Чат для уведомлений установлен: {}", chat_id))
+        Ok(chat_id)
     }
 
     async fn handle_set_text(&self, user_id: i64, text: &str) -> Result<String, CommandError> {
         // Validate input
         self.validate_text(text, "Текст уведомления")?;
 
-        // Get the last subscription
-        let subscriptions = self
-            .storage
-            .get_user_subscriptions(user_id)
-            .await
-            .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
-
-        let last_sub = subscriptions.last().ok_or_else(|| {
-            CommandError::InvalidFormat("❌ Сначала добавьте стримера с помощью /add".to_string())
-        })?;
+        // Get the last subscription with settings
+        let (subscription_id, _twitch_user_id, settings) =
+            self.get_last_subscription_with_settings(user_id).await?;
 
         // Update settings
-        let settings = self
-            .storage
-            .get_notification_settings(last_sub.id)
-            .await
-            .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
-
         if let Some(settings) = settings {
             self.storage
                 .save_notification_settings(
-                    last_sub.id,
+                    subscription_id,
                     &settings.target_chat_id,
                     text,
                     settings.inline_buttons_json.as_deref(),
@@ -425,15 +409,7 @@ impl CommandHandler {
     }
 
     async fn handle_add_button(&self, user_id: i64, button: &str) -> Result<String, CommandError> {
-        let parts: Vec<&str> = button.split('|').collect();
-        if parts.len() != 2 {
-            return Err(CommandError::InvalidFormat(
-                "Формат: /add_button Текст | URL".to_string(),
-            ));
-        }
-
-        let text = parts[0].trim();
-        let url = parts[1].trim();
+        let (text, url) = self.parse_button_input(button)?;
 
         // Validate button limit
         self.validate_button_limit(user_id).await?;
@@ -442,44 +418,17 @@ impl CommandHandler {
         self.validate_button_text(text)?;
         self.validate_url(url)?;
 
-        // Get the last subscription
-        let subscriptions = self
-            .storage
-            .get_user_subscriptions(user_id)
-            .await
-            .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
+        // Get the last subscription with settings
+        let (subscription_id, _twitch_user_id, settings) =
+            self.get_last_subscription_with_settings(user_id).await?;
 
-        let last_sub = subscriptions.last().ok_or_else(|| {
-            CommandError::InvalidFormat("❌ Сначала добавьте стримера с помощью /add".to_string())
-        })?;
+        // Add button to existing buttons
+        let buttons_json = self.add_button_to_json(settings.as_ref(), text, url)?;
 
         // Update settings
-        let settings = self
-            .storage
-            .get_notification_settings(last_sub.id)
-            .await
-            .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
-
-        let mut buttons = Vec::new();
-        if let Some(settings) = &settings {
-            if let Some(existing) = &settings.inline_buttons_json {
-                if let Ok(existing_buttons) =
-                    serde_json::from_str::<Vec<(String, String)>>(existing)
-                {
-                    buttons = existing_buttons;
-                }
-            }
-        }
-
-        buttons.push((text.to_string(), url.to_string()));
-
-        let buttons_json = serde_json::to_string(&buttons).map_err(|e| {
-            CommandError::InvalidFormat(format!("❌ Ошибка сериализации кнопок: {}", e))
-        })?;
-
         self.storage
             .save_notification_settings(
-                last_sub.id,
+                subscription_id,
                 &settings
                     .as_ref()
                     .map(|s| s.target_chat_id.clone())
@@ -496,8 +445,48 @@ impl CommandHandler {
         Ok(format!("✅ Кнопка добавлена: {} | {}", text, url))
     }
 
-    async fn handle_clear_buttons(&self, user_id: i64) -> Result<String, CommandError> {
-        // Get the last subscription
+    fn parse_button_input<'a>(&self, button: &'a str) -> Result<(&'a str, &'a str), CommandError> {
+        let parts: Vec<&str> = button.split('|').collect();
+        if parts.len() != 2 {
+            return Err(CommandError::InvalidFormat(
+                "Формат: /add_button Текст | URL".to_string(),
+            ));
+        }
+
+        let text = parts[0].trim();
+        let url = parts[1].trim();
+
+        Ok((text, url))
+    }
+
+    fn add_button_to_json(
+        &self,
+        settings: Option<&NotificationSettings>,
+        text: &str,
+        url: &str,
+    ) -> Result<String, CommandError> {
+        let mut buttons = Vec::new();
+        if let Some(existing_settings) = settings {
+            if let Some(existing) = &existing_settings.inline_buttons_json {
+                if let Ok(existing_buttons) =
+                    serde_json::from_str::<Vec<(String, String)>>(existing)
+                {
+                    buttons = existing_buttons;
+                }
+            }
+        }
+
+        buttons.push((text.to_string(), url.to_string()));
+
+        serde_json::to_string(&buttons).map_err(|e| {
+            CommandError::InvalidFormat(format!("❌ Ошибка сериализации кнопок: {}", e))
+        })
+    }
+
+    async fn get_last_subscription_with_settings(
+        &self,
+        user_id: i64,
+    ) -> Result<(i64, String, Option<NotificationSettings>), CommandError> {
         let subscriptions = self
             .storage
             .get_user_subscriptions(user_id)
@@ -508,17 +497,25 @@ impl CommandHandler {
             CommandError::InvalidFormat("❌ Сначала добавьте стримера с помощью /add".to_string())
         })?;
 
-        // Update settings
         let settings = self
             .storage
             .get_notification_settings(last_sub.id)
             .await
             .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
 
+        Ok((last_sub.id, last_sub.twitch_user_id.clone(), settings))
+    }
+
+    async fn handle_clear_buttons(&self, user_id: i64) -> Result<String, CommandError> {
+        // Get the last subscription with settings
+        let (subscription_id, _twitch_user_id, settings) =
+            self.get_last_subscription_with_settings(user_id).await?;
+
+        // Update settings with no buttons
         if let Some(settings) = settings {
             self.storage
                 .save_notification_settings(
-                    last_sub.id,
+                    subscription_id,
                     &settings.target_chat_id,
                     &settings.custom_message,
                     None,
@@ -531,52 +528,22 @@ impl CommandHandler {
     }
 
     async fn handle_test(&self, user_id: i64) -> Result<String, CommandError> {
-        // Get the last subscription
-        let subscriptions = self
-            .storage
-            .get_user_subscriptions(user_id)
-            .await
-            .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
-
-        let last_sub = subscriptions.last().ok_or_else(|| {
-            CommandError::InvalidFormat("❌ Сначала добавьте стримера с помощью /add".to_string())
-        })?;
-
-        // Get settings
-        let settings = self
-            .storage
-            .get_notification_settings(last_sub.id)
-            .await
-            .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
+        // Get the last subscription with settings
+        let (_subscription_id, twitch_user_id, settings) =
+            self.get_last_subscription_with_settings(user_id).await?;
 
         if let Some(settings) = settings {
-            // Check if target chat is configured
-            if settings.target_chat_id.is_empty() {
-                return Ok(
-                    "❌ Чат для уведомлений не настроен. Используйте /set_channel".to_string(),
-                );
-            }
-
-            // Check if target_chat_id is a numeric ID or a username
-            let chat_id: i64 = if let Ok(id) = settings.target_chat_id.parse::<i64>() {
-                id
-            } else {
-                // If it's a username (starts with @), we can't send to it directly
-                return Ok("❌ Чат для уведомлений настроен как username (@channel). Для теста укажите числовой ID чата с помощью /set_channel".to_string());
-            };
+            // Validate target chat
+            let chat_id = self.validate_target_chat(&settings.target_chat_id)?;
 
             // Parse inline buttons
-            let inline_buttons = if let Some(json) = settings.inline_buttons_json {
-                serde_json::from_str::<Vec<(String, String)>>(&json).ok()
-            } else {
-                None
-            };
+            let inline_buttons = self.parse_inline_buttons(&settings.inline_buttons_json);
 
             // Send test notification to configured channel
             self.bot
                 .send_stream_notification(
                     chat_id,
-                    &last_sub.twitch_user_id,
+                    &twitch_user_id,
                     &settings.custom_message,
                     inline_buttons,
                 )
@@ -589,40 +556,22 @@ impl CommandHandler {
     }
 
     async fn handle_preview(&self, user_id: i64) -> Result<String, CommandError> {
-        // Get the last subscription
-        let subscriptions = self
-            .storage
-            .get_user_subscriptions(user_id)
-            .await
-            .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
-
-        let last_sub = subscriptions.last().ok_or_else(|| {
-            CommandError::InvalidFormat("❌ Сначала добавьте стримера с помощью /add".to_string())
-        })?;
-
-        // Get settings
-        let settings = self
-            .storage
-            .get_notification_settings(last_sub.id)
-            .await
-            .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
+        // Get the last subscription with settings
+        let (_subscription_id, twitch_user_id, settings) =
+            self.get_last_subscription_with_settings(user_id).await?;
 
         if let Some(settings) = settings {
             // Always send preview to user's private chat
             let chat_id: i64 = user_id;
 
             // Parse inline buttons
-            let inline_buttons = if let Some(json) = settings.inline_buttons_json {
-                serde_json::from_str::<Vec<(String, String)>>(&json).ok()
-            } else {
-                None
-            };
+            let inline_buttons = self.parse_inline_buttons(&settings.inline_buttons_json);
 
             // Send preview to private chat
             self.bot
                 .send_stream_notification(
                     chat_id,
-                    &last_sub.twitch_user_id,
+                    &twitch_user_id,
                     &settings.custom_message,
                     inline_buttons,
                 )
@@ -631,6 +580,38 @@ impl CommandHandler {
             Ok("✅ Превью уведомления отправлено в личные сообщения".to_string())
         } else {
             Ok("❌ Настройки не найдены".to_string())
+        }
+    }
+
+    fn validate_target_chat(&self, target_chat_id: &str) -> Result<i64, CommandError> {
+        // Check if target chat is configured
+        if target_chat_id.is_empty() {
+            return Err(CommandError::InvalidFormat(
+                "❌ Чат для уведомлений не настроен. Используйте /set_channel".to_string(),
+            ));
+        }
+
+        // Check if target_chat_id is a numeric ID or a username
+        let chat_id: i64 = if let Ok(id) = target_chat_id.parse::<i64>() {
+            id
+        } else {
+            // If it's a username (starts with @), we can't send to it directly
+            return Err(CommandError::InvalidFormat(
+                "❌ Чат для уведомлений настроен как username (@channel). Для теста укажите числовой ID чата с помощью /set_channel".to_string(),
+            ));
+        };
+
+        Ok(chat_id)
+    }
+
+    fn parse_inline_buttons(
+        &self,
+        inline_buttons_json: &Option<String>,
+    ) -> Option<Vec<(String, String)>> {
+        if let Some(json) = inline_buttons_json {
+            serde_json::from_str::<Vec<(String, String)>>(json).ok()
+        } else {
+            None
         }
     }
 
