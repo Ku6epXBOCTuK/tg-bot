@@ -54,3 +54,5 @@ CREATE INDEX IF NOT EXISTS idx_stream_states_status ON stream_states (status);
 CREATE INDEX IF NOT EXISTS idx_user_subscriptions_user ON user_subscriptions (user_telegram_id);
 
 CREATE INDEX IF NOT EXISTS idx_user_subscriptions_twitch ON user_subscriptions (twitch_user_id);
+
+CREATE INDEX IF NOT EXISTS idx_notification_settings_subscription ON notification_settings (subscription_id);

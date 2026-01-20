@@ -84,11 +84,19 @@
 
 **Статус:** Исправлено. Добавлен метод `get_all_notification_settings_for_user()` в `src/storage/sqlite.rs`, который выполняет JOIN запрос для получения всех подписок и настроек пользователя за один запрос. Функция `handle_mysettings()` теперь использует этот метод вместо цикла с отдельными запросами.
 
-### 10. Отсутствие индексов (migrations/001_initial_schema.sql)
+### 10. ✅ Отсутствие индексов (migrations/001_initial_schema.sql)
 
 **Проблема:** Медленные запросы при большом количестве данных.
 
 **Решение:** Добавить индексы.
+
+**Статус:** Исправлено. Добавлен индекс `idx_notification_settings_subscription` на поле `subscription_id` в таблице `notification_settings`. Существующие индексы:
+
+- `idx_streamers_login` - streamers(streamer_login)
+- `idx_stream_states_status` - stream_states(status)
+- `idx_user_subscriptions_user` - user_subscriptions(user_telegram_id)
+- `idx_user_subscriptions_twitch` - user_subscriptions(twitch_user_id)
+- `idx_notification_settings_subscription` - notification_settings(subscription_id)
 
 ## Дополнительные улучшения
 
