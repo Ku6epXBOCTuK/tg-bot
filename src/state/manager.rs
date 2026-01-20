@@ -99,12 +99,22 @@ impl StateManager {
                 let state_manager = self.clone();
                 let streamer_id_clone = streamer_id.to_string();
                 let streamer_login_clone = streamer_login.to_string();
+                let grace_period_start = state.grace_period_start;
 
                 tokio::spawn(async move {
                     sleep(Duration::from_secs(state_manager.grace_period_online)).await;
 
                     let mut states = state_manager.states.write().await;
                     if let Some(state) = states.get_mut(&streamer_id_clone) {
+                        // Check if grace period is still valid (race condition protection)
+                        if state.grace_period_start != grace_period_start {
+                            info!(
+                                "Grace period for {} is no longer valid, ignoring timer",
+                                streamer_login_clone
+                            );
+                            return;
+                        }
+
                         if state.status == StreamStatus::OnlinePending {
                             info!(
                                 "Grace period ended for {}, confirming online",
@@ -226,12 +236,22 @@ impl StateManager {
                 let state_manager = self.clone();
                 let streamer_id_clone = streamer_id.to_string();
                 let streamer_login_clone = streamer_login.to_string();
+                let grace_period_start = state.grace_period_start;
 
                 tokio::spawn(async move {
                     sleep(Duration::from_secs(state_manager.grace_period_offline)).await;
 
                     let mut states = state_manager.states.write().await;
                     if let Some(state) = states.get_mut(&streamer_id_clone) {
+                        // Check if grace period is still valid (race condition protection)
+                        if state.grace_period_start != grace_period_start {
+                            info!(
+                                "Grace period for {} is no longer valid, ignoring timer",
+                                streamer_login_clone
+                            );
+                            return;
+                        }
+
                         if state.status == StreamStatus::OfflinePending {
                             info!(
                                 "Grace period ended for {}, confirming offline",

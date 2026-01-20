@@ -199,11 +199,9 @@ impl CommandHandler {
             .await
             .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
 
-        if subscriptions.is_empty() {
-            return Ok("❌ Сначала добавьте стримера с помощью /add".to_string());
-        }
-
-        let last_sub = subscriptions.last().unwrap();
+        let last_sub = subscriptions.last().ok_or_else(|| {
+            CommandError::InvalidFormat("❌ Сначала добавьте стримера с помощью /add".to_string())
+        })?;
 
         // Update settings
         let settings = self
@@ -235,11 +233,9 @@ impl CommandHandler {
             .await
             .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
 
-        if subscriptions.is_empty() {
-            return Ok("❌ Сначала добавьте стримера с помощью /add".to_string());
-        }
-
-        let last_sub = subscriptions.last().unwrap();
+        let last_sub = subscriptions.last().ok_or_else(|| {
+            CommandError::InvalidFormat("❌ Сначала добавьте стримера с помощью /add".to_string())
+        })?;
 
         // Update settings
         let settings = self
@@ -281,11 +277,9 @@ impl CommandHandler {
             .await
             .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
 
-        if subscriptions.is_empty() {
-            return Ok("❌ Сначала добавьте стримера с помощью /add".to_string());
-        }
-
-        let last_sub = subscriptions.last().unwrap();
+        let last_sub = subscriptions.last().ok_or_else(|| {
+            CommandError::InvalidFormat("❌ Сначала добавьте стримера с помощью /add".to_string())
+        })?;
 
         // Update settings
         let settings = self
@@ -307,7 +301,9 @@ impl CommandHandler {
 
         buttons.push((text.to_string(), url.to_string()));
 
-        let buttons_json = serde_json::to_string(&buttons).unwrap();
+        let buttons_json = serde_json::to_string(&buttons).map_err(|e| {
+            CommandError::InvalidFormat(format!("❌ Ошибка сериализации кнопок: {}", e))
+        })?;
 
         self.storage
             .save_notification_settings(
@@ -336,11 +332,9 @@ impl CommandHandler {
             .await
             .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
 
-        if subscriptions.is_empty() {
-            return Ok("❌ Сначала добавьте стримера с помощью /add".to_string());
-        }
-
-        let last_sub = subscriptions.last().unwrap();
+        let last_sub = subscriptions.last().ok_or_else(|| {
+            CommandError::InvalidFormat("❌ Сначала добавьте стримера с помощью /add".to_string())
+        })?;
 
         // Update settings
         let settings = self
@@ -372,11 +366,9 @@ impl CommandHandler {
             .await
             .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
 
-        if subscriptions.is_empty() {
-            return Ok("❌ Сначала добавьте стримера с помощью /add".to_string());
-        }
-
-        let last_sub = subscriptions.last().unwrap();
+        let last_sub = subscriptions.last().ok_or_else(|| {
+            CommandError::InvalidFormat("❌ Сначала добавьте стримера с помощью /add".to_string())
+        })?;
 
         // Get settings
         let settings = self
@@ -432,11 +424,9 @@ impl CommandHandler {
             .await
             .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
 
-        if subscriptions.is_empty() {
-            return Ok("❌ Сначала добавьте стримера с помощью /add".to_string());
-        }
-
-        let last_sub = subscriptions.last().unwrap();
+        let last_sub = subscriptions.last().ok_or_else(|| {
+            CommandError::InvalidFormat("❌ Сначала добавьте стримера с помощью /add".to_string())
+        })?;
 
         // Get settings
         let settings = self

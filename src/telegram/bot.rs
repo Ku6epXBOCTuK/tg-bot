@@ -65,11 +65,31 @@ impl TelegramBot {
                 .parse_mode(teloxide::types::ParseMode::Html);
 
             if let Some(buttons) = &inline_buttons {
-                let keyboard =
-                    InlineKeyboardMarkup::new(buttons.clone().into_iter().map(|(text, url)| {
-                        vec![InlineKeyboardButton::url(text, Url::parse(&url).unwrap())]
-                    }));
-                request = request.reply_markup(keyboard);
+                let keyboard_results: Result<Vec<_>, _> = buttons
+                    .clone()
+                    .into_iter()
+                    .map(|(text, url)| {
+                        Url::parse(&url)
+                            .map(|parsed_url| vec![InlineKeyboardButton::url(text, parsed_url)])
+                            .inspect_err(|&e| {
+                                error!("Failed to parse URL '{}': {}", url, e);
+                            })
+                    })
+                    .collect();
+
+                match keyboard_results {
+                    Ok(keyboard) => {
+                        let keyboard = InlineKeyboardMarkup::new(keyboard);
+                        request = request.reply_markup(keyboard);
+                    }
+                    Err(_) => {
+                        error!(
+                            "Failed to create inline keyboard for streamer {}: invalid URL(s)",
+                            streamer_login
+                        );
+                        // Continue without buttons
+                    }
+                }
             }
 
             match request.await {
