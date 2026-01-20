@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::state::manager::StateManager;
+use crate::state::manager::{StateManager, StreamEvent};
 use crate::storage::sqlite::Storage;
 use crate::twitch::api::TwitchApiClient;
 use std::sync::Arc;
@@ -60,16 +60,33 @@ impl TwitchPoller {
                         if is_online {
                             let stream = streams.iter().find(|s| &s.user_id == user_id).unwrap();
 
-                            self.state_manager
-                                .handle_stream_online(
-                                    user_id,
-                                    &stream.user_login,
-                                    &stream.user_name,
-                                    &format!("{}_{}", user_id, stream.started_at),
-                                    &stream.started_at,
-                                    &stream.started_at,
-                                )
-                                .await;
+                            // Get target chat IDs for this streamer
+                            let target_chat_ids = match self
+                                .storage
+                                .get_target_chat_ids_for_streamer(user_id)
+                                .await
+                            {
+                                Ok(chat_ids) => chat_ids,
+                                Err(e) => {
+                                    error!(
+                                        "Failed to get target chat IDs for streamer {}: {}",
+                                        user_id, e
+                                    );
+                                    Vec::new()
+                                }
+                            };
+
+                            let event = StreamEvent {
+                                streamer_id: user_id.clone(),
+                                streamer_login: stream.user_login.clone(),
+                                streamer_name: stream.user_name.clone(),
+                                event_id: format!("{}_{}", user_id, stream.started_at),
+                                event_timestamp: stream.started_at.clone(),
+                                started_at: stream.started_at.clone(),
+                                target_chat_ids,
+                            };
+
+                            self.state_manager.handle_stream_online(event).await;
                         } else {
                             self.state_manager
                                 .handle_stream_offline(

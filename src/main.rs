@@ -70,6 +70,7 @@ async fn main() {
     // Initialize state manager
     let state_manager = Arc::new(StateManager::new(
         telegram_bot.clone(),
+        storage.clone(),
         config.grace_period_online,
         config.grace_period_offline,
     ));

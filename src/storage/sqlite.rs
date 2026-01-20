@@ -403,4 +403,26 @@ impl Storage {
             })
             .collect())
     }
+
+    pub async fn get_target_chat_ids_for_streamer(
+        &self,
+        twitch_user_id: &str,
+    ) -> Result<Vec<String>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT ns.target_chat_id
+            FROM user_subscriptions us
+            INNER JOIN notification_settings ns ON us.id = ns.subscription_id
+            WHERE us.twitch_user_id = ?
+            "#,
+        )
+        .bind(twitch_user_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| row.get("target_chat_id"))
+            .collect())
+    }
 }
