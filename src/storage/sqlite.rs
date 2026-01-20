@@ -586,4 +586,47 @@ impl Storage {
             inline_buttons_json: row.get("inline_buttons_json"),
         }))
     }
+
+    pub async fn get_all_notification_settings_for_user(
+        &self,
+        user_telegram_id: i64,
+    ) -> Result<Vec<(i64, String, NotificationSettings)>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                us.id as subscription_id,
+                us.twitch_user_id,
+                ns.target_chat_id,
+                ns.custom_message,
+                ns.inline_buttons_json
+            FROM user_subscriptions us
+            LEFT JOIN notification_settings ns ON us.id = ns.subscription_id
+            WHERE us.user_telegram_id = ?
+            "#,
+        )
+        .bind(user_telegram_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let subscription_id: i64 = row.get("subscription_id");
+                let twitch_user_id: String = row.get("twitch_user_id");
+                let target_chat_id: String = row.get("target_chat_id");
+                let custom_message: String = row.get("custom_message");
+                let inline_buttons_json: Option<String> = row.get("inline_buttons_json");
+
+                (
+                    subscription_id,
+                    twitch_user_id,
+                    NotificationSettings {
+                        target_chat_id,
+                        custom_message,
+                        inline_buttons_json,
+                    },
+                )
+            })
+            .collect())
+    }
 }

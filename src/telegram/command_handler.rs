@@ -226,64 +226,59 @@ impl CommandHandler {
     }
 
     async fn handle_mysettings(&self, user_id: i64) -> Result<String, CommandError> {
-        let subscriptions = self
+        // Fetch all subscriptions and settings in a single query (eliminates N+1)
+        let subscriptions_with_settings = self
             .storage
-            .get_user_subscriptions(user_id)
+            .get_all_notification_settings_for_user(user_id)
             .await
             .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
 
-        if subscriptions.is_empty() {
+        if subscriptions_with_settings.is_empty() {
             return Ok("❌ Настройки не установлены. Используйте /add username".to_string());
         }
 
         let mut response = "📋 <b>Ваши подписки и настройки:</b>\n\n".to_string();
 
-        for (index, sub) in subscriptions.iter().enumerate() {
-            let settings = self
-                .storage
-                .get_notification_settings(sub.id)
-                .await
-                .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
+        for (index, (subscription_id, twitch_user_id, settings)) in
+            subscriptions_with_settings.iter().enumerate()
+        {
+            response.push_str(&format!(
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
+                <b>Подписка #{}:</b> <code>{}</code>\n\n\
+                📺 <b>Стример:</b> @{}\n\
+                💬 <b>Чат для уведомлений:</b> <code>{}</code>\n\
+                📝 <b>Текст уведомления:</b> {}\n",
+                index + 1,
+                subscription_id,
+                twitch_user_id,
+                settings.target_chat_id,
+                settings.custom_message
+            ));
 
-            if let Some(settings) = settings {
-                response.push_str(&format!(
-                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
-                    <b>Подписка #{}:</b> <code>{}</code>\n\n\
-                    📺 <b>Стример:</b> @{}\n\
-                    💬 <b>Чат для уведомлений:</b> <code>{}</code>\n\
-                    📝 <b>Текст уведомления:</b> {}\n",
-                    index + 1,
-                    sub.id,
-                    sub.twitch_user_id,
-                    settings.target_chat_id,
-                    settings.custom_message
-                ));
-
-                // Parse and display buttons
-                if let Some(json) = &settings.inline_buttons_json {
-                    if let Ok(buttons) = serde_json::from_str::<Vec<(String, String)>>(json) {
-                        if !buttons.is_empty() {
-                            response.push_str("🔘 <b>Кнопки:</b>\n");
-                            for (btn_index, (btn_text, btn_url)) in buttons.iter().enumerate() {
-                                response.push_str(&format!(
-                                    "  {}. {} | <code>{}</code>\n",
-                                    btn_index + 1,
-                                    btn_text,
-                                    btn_url
-                                ));
-                            }
-                        } else {
-                            response.push_str("🔘 <b>Кнопки:</b> нет\n");
+            // Parse and display buttons
+            if let Some(json) = &settings.inline_buttons_json {
+                if let Ok(buttons) = serde_json::from_str::<Vec<(String, String)>>(json) {
+                    if !buttons.is_empty() {
+                        response.push_str("🔘 <b>Кнопки:</b>\n");
+                        for (btn_index, (btn_text, btn_url)) in buttons.iter().enumerate() {
+                            response.push_str(&format!(
+                                "  {}. {} | <code>{}</code>\n",
+                                btn_index + 1,
+                                btn_text,
+                                btn_url
+                            ));
                         }
                     } else {
-                        response.push_str("🔘 <b>Кнопки:</b> ❌ ошибка парсинга\n");
+                        response.push_str("🔘 <b>Кнопки:</b> нет\n");
                     }
                 } else {
-                    response.push_str("🔘 <b>Кнопки:</b> нет\n");
+                    response.push_str("🔘 <b>Кнопки:</b> ❌ ошибка парсинга\n");
                 }
-
-                response.push('\n');
+            } else {
+                response.push_str("🔘 <b>Кнопки:</b> нет\n");
             }
+
+            response.push('\n');
         }
 
         response.push_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
