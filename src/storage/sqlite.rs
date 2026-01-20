@@ -24,8 +24,8 @@ pub struct Storage {
 impl Storage {
     pub async fn new(database_url: &str) -> Result<Self, StorageError> {
         // Extract file path from URL (e.g., "sqlite:twitch_bot.db" -> "twitch_bot.db")
-        let db_file = if database_url.starts_with("sqlite:") {
-            &database_url[7..]
+        let db_file = if let Some(stripped) = database_url.strip_prefix("sqlite:") {
+            stripped
         } else {
             database_url
         };
@@ -62,8 +62,8 @@ impl Storage {
             Ok(pool) => pool,
             Err(e) => {
                 // Try to provide more helpful error information
-                let db_file = if database_url.starts_with("sqlite:") {
-                    &database_url[7..]
+                let db_file = if let Some(stripped) = database_url.strip_prefix("sqlite:") {
+                    stripped
                 } else {
                     database_url
                 };

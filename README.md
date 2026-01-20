@@ -1,16 +1,15 @@
 # Twitch Telegram Bot
 
-Production-ready Telegram bot for tracking Twitch streams with grace periods.
+Telegram bot для отслеживания стримов на Twitch через опрос API.
 
 ## Features
 
-- ✅ Twitch EventSub webhook integration
-- ✅ Grace period system (3 min online, 10 min offline)
-- ✅ Automatic Telegram notifications
-- ✅ SQLite database persistence
-- ✅ Automatic database creation
-- ✅ Secure webhook verification
-- ✅ Error handling and retries
+- ✅ Опрос Twitch API (периодический)
+- ✅ Грейс-периоды (3 мин онлайн, 10 мин офлайн)
+- ✅ Персональные настройки для каждого пользователя
+- ✅ Кастомные сообщения и кнопки
+- ✅ SQLite база данных (автоматическое создание)
+- ✅ Обработка ошибок и ретраи
 
 ## Quick Start
 
@@ -33,51 +32,33 @@ cp .env.example .env
 cargo run --release
 ```
 
-Database will be created automatically!
+База данных создается автоматически!
 
-### 4. Add streamers
+### 4. Commands
 
-```sql
-INSERT INTO streamers (streamer_id, streamer_login, streamer_name)
-VALUES ('123456789', 'streamer_login', 'Streamer Name');
-```
-
-### 5. Configure notifications
-
-Each user can configure their own notification settings using Telegram commands:
-
-- `/add <twitch_login>` - Add a streamer to track
-- `/set_channel <@username or ID>` - Set the chat/channel for notifications
-- `/set_text <text>` - Set custom notification message
-- `/add_button <text> | <url>` - Add inline button
-- `/test` - Send test notification
-- `/mysettings` - View your subscriptions and settings
-
-**Note:** Each user can have different notification settings for each streamer. The bot will send notifications to the chat specified by each user.
+- `/add <twitch_login>` - Добавить стримера
+- `/set_channel <@username или ID>` - Куда отправлять уведомления
+- `/set_text <текст>` - Кастомный текст уведомления
+- `/add_button <текст> | <url>` - Добавить кнопку
+- `/test` - Тестовое уведомление
+- `/preview` - Превью в личку
+- `/my_settings` - Ваши подписки
+- `/remove <twitch_login>` - Удалить стримера
+- `/help` - Справка
 
 ## Environment Variables
 
-| Variable               | Required | Description                                            |
-| ---------------------- | -------- | ------------------------------------------------------ |
-| `TELEGRAM_BOT_TOKEN`   | Yes      | Telegram bot token                                     |
-| `TWITCH_CLIENT_ID`     | Yes      | Twitch application client ID                           |
-| `TWITCH_CLIENT_SECRET` | Yes      | Twitch application client secret                       |
-| `WEBHOOK_BASE_URL`     | Yes      | Public HTTPS URL of your bot                           |
-| `WEBHOOK_SECRET`       | Yes      | Secret for webhook verification                        |
-| `DATABASE_URL`         | No       | SQLite database path (default: `sqlite:twitch_bot.db`) |
-| `SERVER_PORT`          | No       | HTTP server port (default: `8080`)                     |
-| `GRACE_PERIOD_ONLINE`  | No       | Online grace period in seconds (default: `180`)        |
-| `GRACE_PERIOD_OFFLINE` | No       | Offline grace period in seconds (default: `600`)       |
+| Variable                   | Required | Description                                 |
+| -------------------------- | -------- | ------------------------------------------- |
+| `TELEGRAM_BOT_TOKEN`       | Yes      | Токен бота                                  |
+| `TWITCH_CLIENT_ID`         | Yes      | Twitch Client ID                            |
+| `TWITCH_CLIENT_SECRET`     | Yes      | Twitch Client Secret                        |
+| `DATABASE_URL`             | No       | Путь к БД (default: `sqlite:twitch_bot.db`) |
+| `GRACE_PERIOD_ONLINE`      | No       | Грейс-период онлайн (default: `180`)        |
+| `GRACE_PERIOD_OFFLINE`     | No       | Грейс-период офлайн (default: `600`)        |
+| `POLLING_INTERVAL_SECONDS` | No       | Интервал опроса (default: `60`)             |
 
 ## Deployment
-
-### Railway.app (Recommended)
-
-1. Fork this repository
-2. Create new project on Railway
-3. Connect GitHub repository
-4. Add environment variables
-5. Deploy
 
 ### Docker
 
@@ -86,7 +67,7 @@ docker build -t twitch-telegram-bot .
 docker run -d --env-file .env twitch-telegram-bot
 ```
 
-### Systemd (Linux)
+### Systemd
 
 ```ini
 [Unit]
@@ -108,25 +89,32 @@ WantedBy=multi-user.target
 
 ## Troubleshooting
 
-### Database not created
+### База данных не создается
 
-- Check `DATABASE_URL` in `.env`
-- Ensure you have write permissions
-- Use simple path: `sqlite:twitch_bot.db`
+- Проверьте `DATABASE_URL` в `.env`
+- Права на запись в директорию
 
-### Telegram messages not sending
+### Уведомления не отправляются
 
-- Verify `TELEGRAM_BOT_TOKEN` is correct
-- Ensure bot has permission to post in the target chat/channel
-- Use `/set_channel` command to configure notification destination
+- Проверьте `TELEGRAM_BOT_TOKEN`
+- Добавьте бота в канал как администратора
+- Для каналов используйте ID вместо @username
 
-### Webhooks not received
+### Стримы не отслеживаются
 
-- `WEBHOOK_BASE_URL` must be public HTTPS URL
-- Twitch requires HTTPS for webhooks
-- For local testing, use ngrok: `ngrok http 8080`
+- Проверьте `TWITCH_CLIENT_ID` и `TWITCH_CLIENT_SECRET`
+- Убедитесь, что бот запущен постоянно
+- Проверьте логи на ошибки API
 
 ## Architecture
+
+```
+Telegram Bot → State Manager → Twitch API Poller
+                    ↓
+              SQLite Database
+```
+
+**State Machine:**
 
 ```
 Offline → OnlinePending (3 min) → Online → OfflinePending (10 min) → Offline

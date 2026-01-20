@@ -17,6 +17,7 @@ use crate::twitch::poller::TwitchPoller;
 use std::sync::Arc;
 use teloxide::prelude::*;
 use teloxide::utils::command::BotCommands;
+use tokio::signal;
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -117,70 +118,105 @@ async fn main() {
     let bot = Bot::new(config.telegram_bot_token.clone());
     let handler = command_handler.clone();
 
-    teloxide::repl(bot, move |bot: Bot, msg: Message| {
-        let handler = handler.clone();
-        async move {
-            // Only handle private messages
-            if msg.chat.is_private() {
-                if let Some(text) = msg.text() {
-                    // Log essential info: user ID, username, and command
-                    let user_id = msg.from.as_ref().map(|u| u.id.0).unwrap_or(0);
-                    let username = msg
-                        .from
-                        .as_ref()
-                        .and_then(|u| u.username.clone())
-                        .unwrap_or_else(|| user_id.to_string());
+    // Create a shutdown signal channel
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-                    info!("User {} (ID: {}) sent: {}", username, user_id, text);
+    // Spawn a task to handle Ctrl+C
+    let ctrl_c_handle = tokio::spawn(async move {
+        match signal::ctrl_c().await {
+            Ok(()) => {
+                info!("Received Ctrl+C signal, shutting down...");
+                let _ = shutdown_tx.send(true);
+            }
+            Err(err) => {
+                error!("Unable to listen for shutdown signal: {}", err);
+            }
+        }
+    });
 
-                    // Try to parse command using teloxide's built-in parser
-                    info!("Attempting to parse command: {}", text);
-                    match Command::parse(text, "") {
-                        Ok(command) => {
-                            info!("Parsed command: {:?}", command);
-                            match handler.handle_command(command, user_id as i64).await {
-                                Ok(response) => {
-                                    let result = bot
-                                        .send_message(msg.chat.id, response)
-                                        .parse_mode(teloxide::types::ParseMode::Html)
-                                        .await;
+    // Start the bot with graceful shutdown
+    let bot_handle = tokio::spawn(async move {
+        teloxide::repl(bot, move |bot: Bot, msg: Message| {
+            let handler = handler.clone();
+            let shutdown_rx = shutdown_rx.clone();
+            async move {
+                // Check if shutdown signal was received
+                if *shutdown_rx.borrow() {
+                    return Ok(());
+                }
 
-                                    if let Err(e) = result {
-                                        error!("Failed to send response: {}", e);
+                // Only handle private messages
+                if msg.chat.is_private() {
+                    if let Some(text) = msg.text() {
+                        // Log essential info: user ID, username, and command
+                        let user_id = msg.from.as_ref().map(|u| u.id.0).unwrap_or(0);
+                        let username = msg
+                            .from
+                            .as_ref()
+                            .and_then(|u| u.username.clone())
+                            .unwrap_or_else(|| user_id.to_string());
+
+                        info!("User {} (ID: {}) sent: {}", username, user_id, text);
+
+                        // Try to parse command using teloxide's built-in parser
+                        info!("Attempting to parse command: {}", text);
+                        match Command::parse(text, "") {
+                            Ok(command) => {
+                                info!("Parsed command: {:?}", command);
+                                match handler.handle_command(command, user_id as i64).await {
+                                    Ok(response) => {
+                                        let result = bot
+                                            .send_message(msg.chat.id, response)
+                                            .parse_mode(teloxide::types::ParseMode::Html)
+                                            .await;
+
+                                        if let Err(e) = result {
+                                            error!("Failed to send response: {}", e);
+                                        }
                                     }
-                                }
-                                Err(e) => {
-                                    error!("Error handling command: {}", e);
-                                    let error_msg = format!("❌ Ошибка: {}", e);
-                                    if let Err(send_err) =
-                                        bot.send_message(msg.chat.id, error_msg).await
-                                    {
-                                        error!("Failed to send error message: {}", send_err);
+                                    Err(e) => {
+                                        error!("Error handling command: {}", e);
+                                        let error_msg = format!("❌ Ошибка: {}", e);
+                                        if let Err(send_err) =
+                                            bot.send_message(msg.chat.id, error_msg).await
+                                        {
+                                            error!("Failed to send error message: {}", send_err);
+                                        }
                                     }
                                 }
                             }
-                        }
-                        Err(e) => {
-                            info!("Failed to parse command: {}", e);
-                            // Show help if command is not recognized
-                            if text.starts_with('/') {
-                                let help_response = handler.handle_help();
-                                if let Err(send_err) = bot
-                                    .send_message(msg.chat.id, help_response)
-                                    .parse_mode(teloxide::types::ParseMode::Html)
-                                    .await
-                                {
-                                    error!("Failed to send help: {}", send_err);
+                            Err(e) => {
+                                info!("Failed to parse command: {}", e);
+                                // Show help if command is not recognized
+                                if text.starts_with('/') {
+                                    let help_response = handler.handle_help();
+                                    if let Err(send_err) = bot
+                                        .send_message(msg.chat.id, help_response)
+                                        .parse_mode(teloxide::types::ParseMode::Html)
+                                        .await
+                                    {
+                                        error!("Failed to send help: {}", send_err);
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                Ok(())
             }
-            Ok(())
+        })
+        .await;
+    });
+
+    // Wait for either Ctrl+C or bot shutdown
+    tokio::select! {
+        _ = ctrl_c_handle => {
+            info!("Ctrl+C received, shutting down...");
         }
-    })
-    .await;
+        _ = bot_handle => {
+            info!("Bot shutdown completed");
+        }
+    }
 
     info!("Bot stopped");
 }

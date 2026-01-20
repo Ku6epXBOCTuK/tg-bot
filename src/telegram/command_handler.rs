@@ -85,7 +85,7 @@ impl CommandHandler {
             return Ok("❌ Настройки не установлены. Используйте /add username".to_string());
         }
 
-        let mut response = format!("📋 <b>Ваши подписки и настройки:</b>\n\n");
+        let mut response = "📋 <b>Ваши подписки и настройки:</b>\n\n".to_string();
 
         for (index, sub) in subscriptions.iter().enumerate() {
             let settings = self
@@ -131,7 +131,7 @@ impl CommandHandler {
                     response.push_str("🔘 <b>Кнопки:</b> нет\n");
                 }
 
-                response.push_str("\n");
+                response.push('\n');
             }
         }
 
@@ -158,9 +158,9 @@ impl CommandHandler {
         }
 
         // Parse and validate channel ID
-        let chat_id = if channel.starts_with('@') {
+        let chat_id = if let Some(username) = channel.strip_prefix('@') {
             // It's a username - validate format
-            let username = &channel[1..]; // Remove @
+            // Remove @
             if username.is_empty() {
                 return Err(CommandError::InvalidFormat(
                     "❌ Укажите username после @. Формат: /set_channel @username".to_string(),
@@ -403,11 +403,7 @@ impl CommandHandler {
 
             // Parse inline buttons
             let inline_buttons = if let Some(json) = settings.inline_buttons_json {
-                if let Ok(buttons) = serde_json::from_str::<Vec<(String, String)>>(&json) {
-                    Some(buttons)
-                } else {
-                    None
-                }
+                serde_json::from_str::<Vec<(String, String)>>(&json).ok()
             } else {
                 None
             };
@@ -455,11 +451,7 @@ impl CommandHandler {
 
             // Parse inline buttons
             let inline_buttons = if let Some(json) = settings.inline_buttons_json {
-                if let Ok(buttons) = serde_json::from_str::<Vec<(String, String)>>(&json) {
-                    Some(buttons)
-                } else {
-                    None
-                }
+                serde_json::from_str::<Vec<(String, String)>>(&json).ok()
             } else {
                 None
             };
