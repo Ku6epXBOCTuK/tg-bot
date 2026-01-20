@@ -117,9 +117,7 @@ impl TwitchApiClient {
 
                     // Handle rate limiting (HTTP 429)
                     if status == StatusCode::TOO_MANY_REQUESTS {
-                        if let Err(e) = self.handle_rate_limit(&resp, attempt, max_retries).await {
-                            return Err(e);
-                        }
+                        self.handle_rate_limit(&resp, attempt, max_retries).await?;
                         continue;
                     }
 
@@ -207,9 +205,7 @@ impl TwitchApiClient {
 
                     // Handle rate limiting (HTTP 429)
                     if status == StatusCode::TOO_MANY_REQUESTS {
-                        if let Err(e) = self.handle_rate_limit(&resp, attempt, max_retries).await {
-                            return Err(e);
-                        }
+                        self.handle_rate_limit(&resp, attempt, max_retries).await?;
                         continue;
                     }
 
@@ -316,9 +312,7 @@ impl TwitchApiClient {
 
                     // Handle rate limiting (HTTP 429)
                     if status == StatusCode::TOO_MANY_REQUESTS {
-                        if let Err(e) = self.handle_rate_limit(&resp, attempt, max_retries).await {
-                            return Err(e);
-                        }
+                        self.handle_rate_limit(&resp, attempt, max_retries).await?;
                         continue;
                     }
 
