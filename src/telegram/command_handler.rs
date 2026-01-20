@@ -4,6 +4,13 @@ use crate::telegram::commands::{Command, CommandError};
 use crate::twitch::api::TwitchApiClient;
 use tracing::info;
 
+// Validation constants
+const MAX_STREAMER_LOGIN_LENGTH: usize = 25;
+const MAX_TEXT_LENGTH: usize = 1000;
+const MAX_BUTTON_TEXT_LENGTH: usize = 64;
+const MAX_URL_LENGTH: usize = 2048;
+const MAX_BUTTONS_PER_SUBSCRIPTION: usize = 10;
+
 pub struct CommandHandler {
     storage: Storage,
     bot: TelegramBot,
@@ -17,6 +24,147 @@ impl CommandHandler {
             bot,
             twitch_client,
         }
+    }
+
+    // Validation helper methods
+    fn validate_streamer_login(&self, login: &str) -> Result<(), CommandError> {
+        let trimmed = login.trim();
+
+        if trimmed.is_empty() {
+            return Err(CommandError::InvalidFormat(
+                "❌ Укажите username стримера".to_string(),
+            ));
+        }
+
+        if trimmed.len() > MAX_STREAMER_LOGIN_LENGTH {
+            return Err(CommandError::InvalidFormat(format!(
+                "❌ Username стримера слишком длинный (максимум {} символов)",
+                MAX_STREAMER_LOGIN_LENGTH
+            )));
+        }
+
+        if trimmed.contains(' ') {
+            return Err(CommandError::InvalidFormat(
+                "❌ Username стримера не должен содержать пробелов".to_string(),
+            ));
+        }
+
+        if trimmed.contains('@') {
+            return Err(CommandError::InvalidFormat(
+                "❌ Укажите username без @".to_string(),
+            ));
+        }
+
+        // Check for valid characters (alphanumeric, underscore)
+        if !trimmed
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err(CommandError::InvalidFormat(
+                "❌ Username стримера может содержать только буквы, цифры, подчеркивания и дефисы"
+                    .to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn validate_text(&self, text: &str, field_name: &str) -> Result<(), CommandError> {
+        let trimmed = text.trim();
+
+        if trimmed.is_empty() {
+            return Err(CommandError::InvalidFormat(format!(
+                "❌ {} не может быть пустым",
+                field_name
+            )));
+        }
+
+        if trimmed.len() > MAX_TEXT_LENGTH {
+            return Err(CommandError::InvalidFormat(format!(
+                "❌ {} слишком длинный (максимум {} символов)",
+                field_name, MAX_TEXT_LENGTH
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn validate_button_text(&self, text: &str) -> Result<(), CommandError> {
+        let trimmed = text.trim();
+
+        if trimmed.is_empty() {
+            return Err(CommandError::InvalidFormat(
+                "❌ Текст кнопки не может быть пустым".to_string(),
+            ));
+        }
+
+        if trimmed.len() > MAX_BUTTON_TEXT_LENGTH {
+            return Err(CommandError::InvalidFormat(format!(
+                "❌ Текст кнопки слишком длинный (максимум {} символов)",
+                MAX_BUTTON_TEXT_LENGTH
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn validate_url(&self, url: &str) -> Result<(), CommandError> {
+        let trimmed = url.trim();
+
+        if trimmed.is_empty() {
+            return Err(CommandError::InvalidFormat(
+                "❌ URL не может быть пустым".to_string(),
+            ));
+        }
+
+        if trimmed.len() > MAX_URL_LENGTH {
+            return Err(CommandError::InvalidFormat(format!(
+                "❌ URL слишком длинный (максимум {} символов)",
+                MAX_URL_LENGTH
+            )));
+        }
+
+        // Basic URL validation
+        if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+            return Err(CommandError::InvalidFormat(
+                "❌ URL должен начинаться с http:// или https://".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    async fn validate_button_limit(&self, user_id: i64) -> Result<(), CommandError> {
+        let subscriptions = self
+            .storage
+            .get_user_subscriptions(user_id)
+            .await
+            .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
+
+        let last_sub = subscriptions.last().ok_or_else(|| {
+            CommandError::InvalidFormat("❌ Сначала добавьте стримера с помощью /add".to_string())
+        })?;
+
+        let settings = self
+            .storage
+            .get_notification_settings(last_sub.id)
+            .await
+            .map_err(|e| CommandError::DatabaseError(e.to_string()))?;
+
+        if let Some(settings) = &settings {
+            if let Some(json) = &settings.inline_buttons_json {
+                if let Ok(buttons) = serde_json::from_str::<Vec<(String, String)>>(json) {
+                    if buttons.len() >= MAX_BUTTONS_PER_SUBSCRIPTION {
+                        return Err(CommandError::InvalidFormat(format!(
+                            "❌ Достигнут лимит кнопок (максимум {})",
+                            MAX_BUTTONS_PER_SUBSCRIPTION
+                        )));
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn handle_command(
@@ -40,6 +188,9 @@ impl CommandHandler {
     }
 
     async fn handle_add(&self, user_id: i64, streamer_login: &str) -> Result<String, CommandError> {
+        // Validate input
+        self.validate_streamer_login(streamer_login)?;
+
         // Get Twitch user ID
         let mut client = self.twitch_client.clone();
         let twitch_user_id = client
@@ -157,6 +308,14 @@ impl CommandHandler {
             ));
         }
 
+        // Validate channel length
+        if channel.len() > MAX_TEXT_LENGTH {
+            return Err(CommandError::InvalidFormat(format!(
+                "❌ Идентификатор чата слишком длинный (максимум {} символов)",
+                MAX_TEXT_LENGTH
+            )));
+        }
+
         // Parse and validate channel ID
         let chat_id = if let Some(username) = channel.strip_prefix('@') {
             // It's a username - validate format
@@ -170,6 +329,13 @@ impl CommandHandler {
                 return Err(CommandError::InvalidFormat(
                     "❌ Username не должен содержать пробелов".to_string(),
                 ));
+            }
+            // Additional validation for username
+            if username.len() > MAX_STREAMER_LOGIN_LENGTH {
+                return Err(CommandError::InvalidFormat(format!(
+                    "❌ Username чата слишком длинный (максимум {} символов)",
+                    MAX_STREAMER_LOGIN_LENGTH
+                )));
             }
             channel.to_string()
         } else {
@@ -226,6 +392,9 @@ impl CommandHandler {
     }
 
     async fn handle_set_text(&self, user_id: i64, text: &str) -> Result<String, CommandError> {
+        // Validate input
+        self.validate_text(text, "Текст уведомления")?;
+
         // Get the last subscription
         let subscriptions = self
             .storage
@@ -269,6 +438,13 @@ impl CommandHandler {
 
         let text = parts[0].trim();
         let url = parts[1].trim();
+
+        // Validate button limit
+        self.validate_button_limit(user_id).await?;
+
+        // Validate button text and URL
+        self.validate_button_text(text)?;
+        self.validate_url(url)?;
 
         // Get the last subscription
         let subscriptions = self
@@ -467,6 +643,9 @@ impl CommandHandler {
         user_id: i64,
         streamer_login: &str,
     ) -> Result<String, CommandError> {
+        // Validate input
+        self.validate_streamer_login(streamer_login)?;
+
         // Get Twitch user ID
         let mut client = self.twitch_client.clone();
         let twitch_user_id = client
