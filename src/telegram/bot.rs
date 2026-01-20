@@ -5,6 +5,7 @@ use teloxide::utils::command::BotCommands;
 use thiserror::Error;
 use tracing::{error, info};
 
+use crate::config::Config;
 use crate::telegram::commands::Command;
 
 #[derive(Error, Debug)]
@@ -22,14 +23,16 @@ pub enum TelegramError {
 pub struct TelegramBot {
     bot: Bot,
     max_retries: u32,
+    retry_delay_seconds: u64,
 }
 
 impl TelegramBot {
-    pub fn new(token: String) -> Self {
+    pub fn new(token: String, config: &Config) -> Self {
         let bot = Bot::new(token);
         Self {
             bot,
-            max_retries: 3,
+            max_retries: config.max_retries,
+            retry_delay_seconds: config.retry_delay_seconds,
         }
     }
 
@@ -107,7 +110,10 @@ impl TelegramBot {
                         attempt, chat_id, e
                     );
                     if attempt < self.max_retries {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                        tokio::time::sleep(tokio::time::Duration::from_secs(
+                            self.retry_delay_seconds,
+                        ))
+                        .await;
                     }
                 }
             }
@@ -141,7 +147,10 @@ impl TelegramBot {
                         attempt, message_id, e
                     );
                     if attempt < self.max_retries {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                        tokio::time::sleep(tokio::time::Duration::from_secs(
+                            self.retry_delay_seconds,
+                        ))
+                        .await;
                     }
                 }
             }
@@ -173,7 +182,10 @@ impl TelegramBot {
                         attempt, chat_id, e
                     );
                     if attempt < self.max_retries {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                        tokio::time::sleep(tokio::time::Duration::from_secs(
+                            self.retry_delay_seconds,
+                        ))
+                        .await;
                     }
                 }
             }

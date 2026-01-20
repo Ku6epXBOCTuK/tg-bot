@@ -100,15 +100,23 @@
 
 ## Дополнительные улучшения
 
-### 11. Вынести константы в конфиг
+### 11. ✅ Вынести константы в конфиг
 
-- max_retries: 3
-- retry_delay_seconds: 2
-- duplicate_event_threshold_seconds: 30
-- token_refresh_buffer_seconds: 60
-- max_subscriptions_per_user: 10
-- max_buttons_per_subscription: 10
-- max_message_length: 1000
+**Статус:** Исправлено. Все константы вынесены в `src/config.rs`:
+
+- `max_retries: 3` - максимальное количество попыток
+- `retry_delay_seconds: 2` - задержка между попытками
+- `duplicate_event_threshold_seconds: 30` - порог дублирования событий
+- `token_refresh_buffer_seconds: 60` - буфер обновления токена
+- `max_subscriptions_per_user: 10` - лимит подписок на пользователя
+- `max_buttons_per_subscription: 10` - лимит кнопок на подписку
+- `max_message_length: 1000` - максимальная длина сообщения
+
+Константы используются в:
+
+- `src/telegram/bot.rs` - max_retries, retry_delay_seconds
+- `src/twitch/api.rs` - max_retries, retry_delay_seconds
+- `src/telegram/command_handler.rs` - все валидационные константы
 
 ### 12. Разбить длинные функции
 

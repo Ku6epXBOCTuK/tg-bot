@@ -55,8 +55,8 @@ impl TwitchApiClient {
         }
 
         // Get new token with retry logic
-        let max_retries = 3;
-        let base_delay = Duration::from_secs(2);
+        let max_retries = self.config.max_retries;
+        let base_delay = Duration::from_secs(self.config.retry_delay_seconds);
 
         for attempt in 1..=max_retries {
             let response = self
@@ -154,8 +154,8 @@ impl TwitchApiClient {
     pub async fn get_user_id(&mut self, login: &str) -> Result<String, TwitchApiError> {
         self.ensure_access_token().await?;
 
-        let max_retries = 3;
-        let base_delay = Duration::from_secs(2);
+        let max_retries = self.config.max_retries;
+        let base_delay = Duration::from_secs(self.config.retry_delay_seconds);
 
         for attempt in 1..=max_retries {
             let response = self
@@ -268,8 +268,8 @@ impl TwitchApiClient {
     ) -> Result<Option<String>, TwitchApiError> {
         self.ensure_access_token().await?;
 
-        let max_retries = 3;
-        let base_delay = Duration::from_secs(2);
+        let max_retries = self.config.max_retries;
+        let base_delay = Duration::from_secs(self.config.retry_delay_seconds);
 
         for attempt in 1..=max_retries {
             let response = self
@@ -373,8 +373,8 @@ impl TwitchApiClient {
             query.push(("user_id", user_id.as_str()));
         }
 
-        let max_retries = 3;
-        let base_delay = Duration::from_secs(2);
+        let max_retries = self.config.max_retries;
+        let base_delay = Duration::from_secs(self.config.retry_delay_seconds);
 
         for attempt in 1..=max_retries {
             let response = self

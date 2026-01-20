@@ -57,7 +57,7 @@ async fn main() {
     info!("Storage initialized successfully");
 
     // Initialize Telegram bot
-    let telegram_bot = TelegramBot::new(config.telegram_bot_token.clone());
+    let telegram_bot = TelegramBot::new(config.telegram_bot_token.clone(), &config);
 
     // Set bot commands for autocomplete
     match telegram_bot.set_my_commands().await {
@@ -110,6 +110,7 @@ async fn main() {
         storage.clone(),
         telegram_bot.clone(),
         twitch_client,
+        config.clone(),
     ));
 
     info!("Command handler initialized");

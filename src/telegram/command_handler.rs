@@ -1,28 +1,29 @@
+use crate::config::Config;
 use crate::storage::sqlite::Storage;
 use crate::telegram::bot::TelegramBot;
 use crate::telegram::commands::{Command, CommandError};
 use crate::twitch::api::TwitchApiClient;
 use tracing::info;
 
-// Validation constants
-const MAX_STREAMER_LOGIN_LENGTH: usize = 25;
-const MAX_TEXT_LENGTH: usize = 1000;
-const MAX_BUTTON_TEXT_LENGTH: usize = 64;
-const MAX_URL_LENGTH: usize = 2048;
-const MAX_BUTTONS_PER_SUBSCRIPTION: usize = 10;
-
 pub struct CommandHandler {
     storage: Storage,
     bot: TelegramBot,
     twitch_client: TwitchApiClient,
+    config: Config,
 }
 
 impl CommandHandler {
-    pub fn new(storage: Storage, bot: TelegramBot, twitch_client: TwitchApiClient) -> Self {
+    pub fn new(
+        storage: Storage,
+        bot: TelegramBot,
+        twitch_client: TwitchApiClient,
+        config: Config,
+    ) -> Self {
         Self {
             storage,
             bot,
             twitch_client,
+            config,
         }
     }
 
@@ -36,10 +37,10 @@ impl CommandHandler {
             ));
         }
 
-        if trimmed.len() > MAX_STREAMER_LOGIN_LENGTH {
+        if trimmed.len() > self.config.max_message_length {
             return Err(CommandError::InvalidFormat(format!(
                 "❌ Username стримера слишком длинный (максимум {} символов)",
-                MAX_STREAMER_LOGIN_LENGTH
+                self.config.max_message_length
             )));
         }
 
@@ -79,10 +80,10 @@ impl CommandHandler {
             )));
         }
 
-        if trimmed.len() > MAX_TEXT_LENGTH {
+        if trimmed.len() > self.config.max_message_length {
             return Err(CommandError::InvalidFormat(format!(
                 "❌ {} слишком длинный (максимум {} символов)",
-                field_name, MAX_TEXT_LENGTH
+                field_name, self.config.max_message_length
             )));
         }
 
@@ -98,10 +99,10 @@ impl CommandHandler {
             ));
         }
 
-        if trimmed.len() > MAX_BUTTON_TEXT_LENGTH {
+        if trimmed.len() > self.config.max_message_length {
             return Err(CommandError::InvalidFormat(format!(
                 "❌ Текст кнопки слишком длинный (максимум {} символов)",
-                MAX_BUTTON_TEXT_LENGTH
+                self.config.max_message_length
             )));
         }
 
@@ -117,10 +118,10 @@ impl CommandHandler {
             ));
         }
 
-        if trimmed.len() > MAX_URL_LENGTH {
+        if trimmed.len() > self.config.max_message_length {
             return Err(CommandError::InvalidFormat(format!(
                 "❌ URL слишком длинный (максимум {} символов)",
-                MAX_URL_LENGTH
+                self.config.max_message_length
             )));
         }
 
@@ -154,10 +155,10 @@ impl CommandHandler {
         if let Some(settings) = &settings {
             if let Some(json) = &settings.inline_buttons_json {
                 if let Ok(buttons) = serde_json::from_str::<Vec<(String, String)>>(json) {
-                    if buttons.len() >= MAX_BUTTONS_PER_SUBSCRIPTION {
+                    if buttons.len() >= self.config.max_buttons_per_subscription {
                         return Err(CommandError::InvalidFormat(format!(
                             "❌ Достигнут лимит кнопок (максимум {})",
-                            MAX_BUTTONS_PER_SUBSCRIPTION
+                            self.config.max_buttons_per_subscription
                         )));
                     }
                 }
@@ -304,10 +305,10 @@ impl CommandHandler {
         }
 
         // Validate channel length
-        if channel.len() > MAX_TEXT_LENGTH {
+        if channel.len() > self.config.max_message_length {
             return Err(CommandError::InvalidFormat(format!(
                 "❌ Идентификатор чата слишком длинный (максимум {} символов)",
-                MAX_TEXT_LENGTH
+                self.config.max_message_length
             )));
         }
 
@@ -326,10 +327,10 @@ impl CommandHandler {
                 ));
             }
             // Additional validation for username
-            if username.len() > MAX_STREAMER_LOGIN_LENGTH {
+            if username.len() > self.config.max_message_length {
                 return Err(CommandError::InvalidFormat(format!(
                     "❌ Username чата слишком длинный (максимум {} символов)",
-                    MAX_STREAMER_LOGIN_LENGTH
+                    self.config.max_message_length
                 )));
             }
             channel.to_string()
